@@ -225,8 +225,7 @@ def estimate_weight() -> Response:
 @app.route('/api/animal-types', methods=['GET'])
 def get_animal_types() -> Response:
     """Get available animal types and their calibration info."""
-    processor = AnimalProcessor()
-    types = processor.get_available_types()
+    types = AnimalProcessor.get_available_types()
     return jsonify({
         'success': True,
         'animal_types': types,
