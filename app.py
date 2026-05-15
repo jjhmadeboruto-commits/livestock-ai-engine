@@ -1,6 +1,7 @@
 import base64
 from io import BytesIO
 from datetime import datetime
+import importlib.util
 
 import cv2
 import numpy as np
@@ -87,6 +88,18 @@ def _assess_image_quality(image: np.ndarray) -> dict:
 @app.route('/health')
 def health():
     return jsonify({"status": "ok"}), 200
+
+
+@app.route('/api/debug-mediapipe', methods=['GET'])
+def debug_mediapipe() -> Response:
+    mp_spec = importlib.util.find_spec('mediapipe')
+    python_spec = importlib.util.find_spec('mediapipe.python')
+    return jsonify({
+        'mediapipe_file': mp_spec.origin if mp_spec else None,
+        'mediapipe_exists': mp_spec is not None,
+        'mediapipe_python_exists': python_spec is not None,
+        'mediapipe_python_origin': python_spec.origin if python_spec else None,
+    }), 200
 
 
 @app.route('/api/estimate-weight', methods=['POST'])
