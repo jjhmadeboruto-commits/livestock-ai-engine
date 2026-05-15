@@ -10,13 +10,7 @@ from flask_cors import CORS
 from processor import AnimalProcessor
 
 app = Flask(__name__)
-CORS(app, resources={
-    r"/api/*": {
-        "origins": ["*"],
-        "methods": ["GET", "POST", "OPTIONS"],
-        "allow_headers": ["Content-Type"]
-    }
-})
+CORS(app)
 
 # Session storage for calibration and scan history
 session_calibration = {}
@@ -92,7 +86,7 @@ def _assess_image_quality(image: np.ndarray) -> dict:
 
 @app.route('/health')
 def health():
-    return {"status": "ok"}, 200
+    return jsonify({"status": "ok"}), 200
 
 
 @app.route('/api/estimate-weight', methods=['POST'])
@@ -440,6 +434,15 @@ def handle_not_found(error):
         'message': 'The requested URL was not found on the server.',
         'path': request.path
     }), 404
+
+
+@app.errorhandler(405)
+def handle_method_not_allowed(error):
+    return jsonify({
+        'success': False,
+        'error': 'method_not_allowed',
+        'message': 'The requested method is not allowed for this URL.'
+    }), 405
 
 
 @app.errorhandler(500)
