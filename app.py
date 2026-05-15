@@ -432,5 +432,33 @@ def get_guidelines() -> Response:
     }), 200
 
 
+@app.errorhandler(404)
+def handle_not_found(error):
+    return jsonify({
+        'success': False,
+        'error': 'not_found',
+        'message': 'The requested URL was not found on the server.',
+        'path': request.path
+    }), 404
+
+
+@app.errorhandler(500)
+def handle_internal_error(error):
+    return jsonify({
+        'success': False,
+        'error': 'internal_server_error',
+        'message': 'An unexpected error occurred on the server.'
+    }), 500
+
+
+@app.errorhandler(Exception)
+def handle_unhandled_exception(error):
+    return jsonify({
+        'success': False,
+        'error': 'unhandled_exception',
+        'message': str(error)
+    }), 500
+
+
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000)
