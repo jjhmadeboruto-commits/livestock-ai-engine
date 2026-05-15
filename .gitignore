@@ -1,6 +1,7 @@
 __pycache__/
 *.py[cod]
 *.log
+test_api_log.txt
 .vscode/
 venv/
 env/
