@@ -3,6 +3,10 @@ __pycache__/
 *.log
 test_api_log.txt
 .vscode/
+.venv/
 venv/
 env/
+mp_test_env/
+temp_download*/
+temp_venv/
 .DS_Store
