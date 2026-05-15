@@ -6,9 +6,14 @@ import numpy as np
 from typing import Any, Dict, Optional, Tuple
 
 try:
-    from mediapipe.python import solutions as mp_solutions
-except (ImportError, ModuleNotFoundError):
     mp_solutions = mp.solutions
+except AttributeError:
+    try:
+        from mediapipe.python import solutions as mp_solutions
+    except Exception as err:
+        raise ImportError(
+            'Could not import MediaPipe solutions from either mp.solutions or mediapipe.python.solutions'
+        ) from err
 
 
 class AnimalProcessor:
