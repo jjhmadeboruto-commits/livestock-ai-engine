@@ -5,6 +5,12 @@ import mediapipe as mp
 import numpy as np
 from typing import Any, Dict, Optional, Tuple
 
+try:
+    mp_solutions = mp.solutions
+except AttributeError:
+    import mediapipe.python as mp_python
+    mp_solutions = mp_python.solutions
+
 
 class AnimalProcessor:
     """Processor for estimating livestock weight from pose landmarks."""
@@ -66,9 +72,9 @@ class AnimalProcessor:
         self.animal_type = animal_type.lower()
         if self.animal_type not in self.LIVESTOCK_CALIBRATION:
             self.animal_type = "dairy_cow"
-        self.mp_pose = mp.solutions.pose
+        self.mp_pose = mp_solutions.pose
         self.pose = self.mp_pose.Pose(static_image_mode=True)
-        self.drawing_utils = mp.solutions.drawing_utils
+        self.drawing_utils = mp_solutions.drawing_utils
 
     def process(self, image_bgr: np.ndarray) -> Optional[Dict[str, object]]:
         """Estimate animal weight from a BGR image and annotate detected landmarks.
