@@ -193,9 +193,10 @@ class AnimalProcessor:
         if girth_multiplier is not None:
             self.LIVESTOCK_CALIBRATION[animal_type]["girth_multiplier"] = girth_multiplier
 
-    def get_available_types(self) -> dict:
+    @classmethod
+    def get_available_types(cls) -> dict:
         """Get information about all available livestock types and their current calibration."""
-        return self.LIVESTOCK_CALIBRATION.copy()
+        return cls.LIVESTOCK_CALIBRATION.copy()
 
     def _is_landmark_valid(self, landmark: mp.framework.formats.landmark_pb2.NormalizedLandmark) -> bool:
         """Check whether a landmark is sufficiently visible and within normalized bounds."""
