@@ -1,18 +1,31 @@
 from __future__ import annotations
 
 import cv2
-import mediapipe as mp
+import importlib
 import numpy as np
 from typing import Any, Dict, Optional, Tuple
 
+mp = importlib.import_module('mediapipe')
+mp_solutions = None
+
 try:
     mp_solutions = mp.solutions
-except AttributeError:
+except Exception:
+    pass
+
+if mp_solutions is None:
     try:
-        from mediapipe.python import solutions as mp_solutions
+        mp_solutions = importlib.import_module('mediapipe.python.solutions')
+    except Exception:
+        pass
+
+if mp_solutions is None:
+    try:
+        mp_python = importlib.import_module('mediapipe.python')
+        mp_solutions = mp_python.solutions
     except Exception as err:
         raise ImportError(
-            'Could not import MediaPipe solutions from either mp.solutions or mediapipe.python.solutions'
+            'Could not import MediaPipe solutions from mediapipe or mediapipe.python'
         ) from err
 
 
