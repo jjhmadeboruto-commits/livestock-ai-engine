@@ -140,12 +140,16 @@ def estimate_weight() -> Response:
         - farm_name: Name of the farm
     """
     animal_type = request.args.get('animal_type', 'dairy_cow')
-    SUPPORTED_TYPES = ["dairy_cow", "pig", "poultry", "goat", "sheep", "donkey"]
+    SUPPORTED_TYPES = ["dairy_cow"]
     if animal_type not in SUPPORTED_TYPES:
         return jsonify({
             'status': 'error',
-            'message': f'Unsupported animal_type: {animal_type}',
-            'error_type': 'invalid_animal_type',
+            'message': (
+                f"Animal type '{animal_type}' is not supported. "
+                "This backend currently only supports 'dairy_cow' because the model is based on human/cow pose estimation. "
+                "For other animals, a dedicated model (YOLO, DeepLabCut, Animal Kingdom, etc.) is required."
+            ),
+            'error_type': 'unsupported_animal_type',
             'supported_types': SUPPORTED_TYPES
         }), 400
     session_id = request.args.get('session_id', 'default')
