@@ -117,14 +117,31 @@ class AnimalProcessor:
         self.drawing_utils = self.__class__._drawing_utils
 
     def _get_yolo_model(self):
-        """Lazily load YOLO model."""
-        if self.__class__._yolo_model is None:
-            try:
-                from ultralytics import YOLO
-                self.__class__._yolo_model = YOLO('yolov8n.pt')
-            except ImportError:
-                return None
-        return self.__class__._yolo_model
+        """Removed YOLO to prevent OOM errors on Render free tier."""
+        return None
+
+    def _fallback_contour_detection(self, image_bgr: np.ndarray) -> Optional[Tuple[int, int, int, int]]:
+        """Memory-efficient fallback using OpenCV contours instead of heavy YOLO models."""
+        gray = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2GRAY)
+        blur = cv2.GaussianBlur(gray, (5, 5), 0)
+        # Apply thresholding
+        _, thresh = cv2.threshold(blur, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+        
+        # Find contours
+        contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        if not contours:
+            return None
+            
+        # Find the largest contour (assuming it's the animal)
+        largest_contour = max(contours, key=cv2.contourArea)
+        x, y, w, h = cv2.boundingRect(largest_contour)
+        
+        # Ignore if the contour is too small (e.g. noise)
+        image_area = image_bgr.shape[0] * image_bgr.shape[1]
+        if (w * h) < (image_area * 0.05):
+            return None
+            
+        return (x, y, x + w, y + h)
 
     def process(self, image_bgr: np.ndarray) -> Optional[Dict[str, object]]:
         """Estimate animal weight from a BGR image and annotate detected landmarks.
@@ -168,37 +185,21 @@ class AnimalProcessor:
                     confidence_score = float(np.mean([left_shoulder.visibility, left_hip.visibility, left_heel.visibility]))
                     method_used = 'mediapipe'
 
-        # Fallback to YOLO if MediaPipe failed or YOLO is preferred
+        # Fallback to OpenCV Contours if MediaPipe failed or YOLO is preferred
         if method_used is None:
-            yolo_model = self._get_yolo_model()
-            if yolo_model is not None:
-                results_yolo = yolo_model(image_rgb, verbose=False)
-                boxes = results_yolo[0].boxes if len(results_yolo) > 0 else None
-                if boxes is not None and len(boxes) > 0:
-                    # Find the largest bounding box (assuming it's the main animal)
-                    largest_box = None
-                    max_area = 0
-                    for box in boxes:
-                        x1, y1, x2, y2 = map(int, box.xyxy[0].cpu().numpy())
-                        area = (x2 - x1) * (y2 - y1)
-                        if area > max_area:
-                            max_area = area
-                            largest_box = (x1, y1, x2, y2)
-                            confidence_score = float(box.conf[0].cpu().numpy())
-                    
-                    if largest_box is not None:
-                        x1, y1, x2, y2 = largest_box
-                        cv2.rectangle(annotated_image, (x1, y1), (x2, y2), (0, 255, 0), 2)
-                        cv2.putText(annotated_image, f"{self.LIVESTOCK_CALIBRATION[self.animal_type]['name']} (YOLO)", (x1, max(y1-10, 0)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
-                        
-                        # Use bounding box dimensions as a proxy for body length and height
-                        # We apply a slight scaling factor since bounding box includes head/legs
-                        # whereas mediapipe shoulder-to-hip is shorter
-                        scale_length = 0.85
-                        scale_height = 0.90
-                        body_length_px = (x2 - x1) * scale_length
-                        body_height_px = (y2 - y1) * scale_height
-                        method_used = 'yolo'
+            box = self._fallback_contour_detection(image_bgr)
+            if box is not None:
+                x1, y1, x2, y2 = box
+                cv2.rectangle(annotated_image, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                cv2.putText(annotated_image, f"{self.LIVESTOCK_CALIBRATION[self.animal_type]['name']} (Contour Fallback)", (x1, max(y1-10, 0)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+                
+                # Use bounding box dimensions as a proxy for body length and height
+                scale_length = 0.85
+                scale_height = 0.90
+                body_length_px = (x2 - x1) * scale_length
+                body_height_px = (y2 - y1) * scale_height
+                method_used = 'contour_fallback'
+                confidence_score = 0.6  # Fixed moderate confidence for contour estimation
 
         if method_used is None:
             return None
