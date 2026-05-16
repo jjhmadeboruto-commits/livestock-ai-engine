@@ -8,11 +8,7 @@ import numpy as np
 from flask import Flask, Response, jsonify, request
 from flask_cors import CORS
 from processor import AnimalProcessor
-try:
-    from ultralytics import YOLO
-    yolo_model = YOLO('yolov8n.pt')  # Use the nano model for demo; replace with custom weights for production
-except ImportError:
-    yolo_model = None
+
 
 app = Flask(__name__)
 CORS(app)
