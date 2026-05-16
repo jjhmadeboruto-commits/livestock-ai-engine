@@ -129,6 +129,8 @@ def estimate_weight() -> Response:
         processor = AnimalProcessor(animal_type=animal_type)
     except ValueError as e:
         return jsonify({'error': str(e), 'error_type': 'invalid_animal_type'}), 400
+    except ImportError as e:
+        return jsonify({'error': 'MediaPipe is not available on the server.', 'details': str(e), 'error_type': 'mediapipe_unavailable'}), 500
 
     # Apply session calibration if available
     if session_id in session_calibration:
