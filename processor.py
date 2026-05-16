@@ -52,6 +52,12 @@ class AnimalProcessor:
             "girth_multiplier": 0.60,
             "name": "Poultry (1-8 kg)",
             "expected_range": [0.5, 12]
+        },
+        "pig": {
+            "divisor": 11888.0,
+            "girth_multiplier": 1.50,
+            "name": "Pig (50-300 kg)",
+            "expected_range": [30, 350]
         }
     }
 
@@ -59,6 +65,7 @@ class AnimalProcessor:
     _mp_pose = None
     _drawing_utils = None
     _pose_instance = None
+    _yolo_model = None
 
     def __init__(self, pixel_to_cm_ratio: float = 0.264, animal_type: str = "dairy_cow") -> None:
         """Initialize MediaPipe Pose and scaling configuration.
@@ -109,6 +116,16 @@ class AnimalProcessor:
         self.pose = self.__class__._pose_instance
         self.drawing_utils = self.__class__._drawing_utils
 
+    def _get_yolo_model(self):
+        """Lazily load YOLO model."""
+        if self.__class__._yolo_model is None:
+            try:
+                from ultralytics import YOLO
+                self.__class__._yolo_model = YOLO('yolov8n.pt')
+            except ImportError:
+                return None
+        return self.__class__._yolo_model
+
     def process(self, image_bgr: np.ndarray) -> Optional[Dict[str, object]]:
         """Estimate animal weight from a BGR image and annotate detected landmarks.
 
@@ -119,30 +136,72 @@ class AnimalProcessor:
             A dictionary with results if landmarks were detected, otherwise None.
         """
         image_rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
-        results = self.pose.process(image_rgb)
+        
+        # Determine whether to prioritize MediaPipe or YOLO based on animal type
+        # MediaPipe is generally better for cattle, goats, sheep
+        yolo_preferred = self.animal_type in ["pig", "poultry"]
+        
+        results = None
+        method_used = None
+        body_length_px = 0
+        body_height_px = 0
+        annotated_image = image_bgr.copy()
+        confidence_score = 0.0
 
-        if not results.pose_landmarks:
+        if not yolo_preferred and self.pose is not None:
+            results_mp = self.pose.process(image_rgb)
+            if results_mp.pose_landmarks:
+                image_height, image_width = image_bgr.shape[:2]
+                landmarks = results_mp.pose_landmarks.landmark
+                left_shoulder = landmarks[self.mp_pose.PoseLandmark.LEFT_SHOULDER]
+                left_hip = landmarks[self.mp_pose.PoseLandmark.LEFT_HIP]
+                left_heel = landmarks[self.mp_pose.PoseLandmark.LEFT_HEEL]
+
+                if self._is_landmark_valid(left_shoulder) and self._is_landmark_valid(left_hip) and self._is_landmark_valid(left_heel):
+                    shoulder_px = self._normalized_to_pixel(left_shoulder, image_width, image_height)
+                    hip_px = self._normalized_to_pixel(left_hip, image_width, image_height)
+                    heel_px = self._normalized_to_pixel(left_heel, image_width, image_height)
+
+                    body_length_px = self._euclidean_distance(shoulder_px, hip_px)
+                    body_height_px = self._euclidean_distance(hip_px, heel_px)
+                    self._draw_pose(annotated_image, results_mp)
+                    confidence_score = float(np.mean([left_shoulder.visibility, left_hip.visibility, left_heel.visibility]))
+                    method_used = 'mediapipe'
+
+        # Fallback to YOLO if MediaPipe failed or YOLO is preferred
+        if method_used is None:
+            yolo_model = self._get_yolo_model()
+            if yolo_model is not None:
+                results_yolo = yolo_model(image_rgb, verbose=False)
+                boxes = results_yolo[0].boxes if len(results_yolo) > 0 else None
+                if boxes is not None and len(boxes) > 0:
+                    # Find the largest bounding box (assuming it's the main animal)
+                    largest_box = None
+                    max_area = 0
+                    for box in boxes:
+                        x1, y1, x2, y2 = map(int, box.xyxy[0].cpu().numpy())
+                        area = (x2 - x1) * (y2 - y1)
+                        if area > max_area:
+                            max_area = area
+                            largest_box = (x1, y1, x2, y2)
+                            confidence_score = float(box.conf[0].cpu().numpy())
+                    
+                    if largest_box is not None:
+                        x1, y1, x2, y2 = largest_box
+                        cv2.rectangle(annotated_image, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                        cv2.putText(annotated_image, f"{self.LIVESTOCK_CALIBRATION[self.animal_type]['name']} (YOLO)", (x1, max(y1-10, 0)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+                        
+                        # Use bounding box dimensions as a proxy for body length and height
+                        # We apply a slight scaling factor since bounding box includes head/legs
+                        # whereas mediapipe shoulder-to-hip is shorter
+                        scale_length = 0.85
+                        scale_height = 0.90
+                        body_length_px = (x2 - x1) * scale_length
+                        body_height_px = (y2 - y1) * scale_height
+                        method_used = 'yolo'
+
+        if method_used is None:
             return None
-
-        image_height, image_width = image_bgr.shape[:2]
-        landmarks = results.pose_landmarks.landmark
-
-        left_shoulder = landmarks[self.mp_pose.PoseLandmark.LEFT_SHOULDER]
-        left_hip = landmarks[self.mp_pose.PoseLandmark.LEFT_HIP]
-        left_heel = landmarks[self.mp_pose.PoseLandmark.LEFT_HEEL]
-
-        if not self._is_landmark_valid(left_shoulder) or not self._is_landmark_valid(
-            left_hip
-        ) or not self._is_landmark_valid(left_heel):
-            return None
-
-        shoulder_px = self._normalized_to_pixel(left_shoulder, image_width, image_height)
-        hip_px = self._normalized_to_pixel(left_hip, image_width, image_height)
-        heel_px = self._normalized_to_pixel(left_heel, image_width, image_height)
-
-        # Use shoulder-to-hip as the body length proxy and hip-to-heel as a leg height proxy.
-        body_length_px = self._euclidean_distance(shoulder_px, hip_px)
-        body_height_px = self._euclidean_distance(hip_px, heel_px)
 
         length_cm = body_length_px * self._get_pixel_to_cm_ratio()
         height_cm = body_height_px * self._get_pixel_to_cm_ratio()
@@ -151,16 +210,6 @@ class AnimalProcessor:
         estimated_girth_cm = length_cm * calibration["girth_multiplier"]
         weight_kg = (length_cm * (estimated_girth_cm ** 2)) / calibration["divisor"]
 
-        annotated_image = image_bgr.copy()
-        self._draw_pose(annotated_image, results)
-
-        confidence_score = float(
-            np.mean(
-                [left_shoulder.visibility, left_hip.visibility, left_heel.visibility]
-            )
-        )
-
-        calibration = self.LIVESTOCK_CALIBRATION[self.animal_type]
         expected_min, expected_max = calibration.get('expected_range', (None, None))
         is_within_expected = True
         if expected_min is not None and expected_max is not None:
@@ -176,6 +225,7 @@ class AnimalProcessor:
             "annotated_image": annotated_image,
             "expected_weight_range": calibration.get('expected_range'),
             "within_expected_range": is_within_expected,
+            "method": method_used,
         }
 
     def _normalized_to_pixel(
