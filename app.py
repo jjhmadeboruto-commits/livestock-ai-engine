@@ -18,9 +18,8 @@ session_calibration = {}
 scan_history = []
 
 
-def _read_image_from_file(file_storage) -> np.ndarray:
-    """Read an uploaded file into an OpenCV BGR image."""
-    file_bytes = file_storage.read()
+def _read_image_from_bytes(file_bytes: bytes) -> np.ndarray:
+    """Decode raw image bytes into an OpenCV BGR image."""
     if not file_bytes:
         return None
 
@@ -34,6 +33,11 @@ def _read_image_from_file(file_storage) -> np.ndarray:
         return cv2.imdecode(fallback_array, cv2.IMREAD_COLOR)
     except cv2.error:
         return None
+
+
+def _read_image_from_file(file_storage) -> np.ndarray:
+    """Read an uploaded file into an OpenCV BGR image."""
+    return _read_image_from_bytes(file_storage.read())
 
 
 def _encode_image_to_base64(image: np.ndarray) -> str:
@@ -182,9 +186,19 @@ def estimate_weight() -> Response:
         if image_file.filename == '':
             return jsonify({'error': 'No image file provided.', 'error_type': 'empty_filename'}), 400
 
-        image = _read_image_from_file(image_file)
+        file_bytes = image_file.read()
+        if not file_bytes:
+            return jsonify({'error': 'Invalid image data. Please upload a valid JPEG or PNG.', 'error_type': 'invalid_image', 'file_size': 0}), 400
+
+        image = _read_image_from_bytes(file_bytes)
         if image is None:
-            return jsonify({'error': 'Invalid image data. Please upload a valid JPEG or PNG.', 'error_type': 'invalid_image'}), 400
+            signature = list(file_bytes[:8])
+            return jsonify({
+                'error': 'Invalid image data. Please upload a valid JPEG or PNG.',
+                'error_type': 'invalid_image',
+                'file_size': len(file_bytes),
+                'signature': signature
+            }), 400
 
         # Assess image quality
         quality_info = _assess_image_quality(image)
