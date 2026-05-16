@@ -5,29 +5,6 @@ import importlib
 import numpy as np
 from typing import Any, Dict, Optional, Tuple
 
-mp = importlib.import_module('mediapipe')
-mp_solutions = None
-
-try:
-    mp_solutions = mp.solutions
-except Exception:
-    pass
-
-if mp_solutions is None:
-    try:
-        mp_solutions = importlib.import_module('mediapipe.python.solutions')
-    except Exception:
-        pass
-
-if mp_solutions is None:
-    try:
-        mp_python = importlib.import_module('mediapipe.python')
-        mp_solutions = mp_python.solutions
-    except Exception as err:
-        raise ImportError(
-            'Could not import MediaPipe solutions from mediapipe or mediapipe.python'
-        ) from err
-
 
 class AnimalProcessor:
     """Processor for estimating livestock weight from pose landmarks."""
@@ -89,6 +66,31 @@ class AnimalProcessor:
         self.animal_type = animal_type.lower()
         if self.animal_type not in self.LIVESTOCK_CALIBRATION:
             self.animal_type = "dairy_cow"
+
+        # Lazy import MediaPipe so the module import doesn't crash the app
+        mp = None
+        mp_solutions = None
+        try:
+            mp = importlib.import_module('mediapipe')
+            mp_solutions = getattr(mp, 'solutions', None)
+        except Exception:
+            mp = None
+
+        if mp_solutions is None:
+            try:
+                mp_solutions = importlib.import_module('mediapipe.python.solutions')
+            except Exception:
+                mp_solutions = None
+
+        if mp_solutions is None:
+            try:
+                mp_python = importlib.import_module('mediapipe.python')
+                mp_solutions = getattr(mp_python, 'solutions', None)
+            except Exception as err:
+                raise ImportError(
+                    'Could not import MediaPipe solutions from mediapipe or mediapipe.python'
+                ) from err
+
         self.mp_pose = mp_solutions.pose
         self.pose = self.mp_pose.Pose(static_image_mode=True)
         self.drawing_utils = mp_solutions.drawing_utils
