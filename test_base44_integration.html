@@ -303,7 +303,24 @@
     </div>
 
     <script>
-        const API_URL = 'http://localhost:5000'; // Change to Render URL for production
+        const API_URL = 'https://livestock-ai-engine.onrender.com'; // Production Render URL
+
+        // Silent warm-up ping to avoid Render cold-start delays.
+        async function warmUpBackend(retries = 6, delayMs = 10000) {
+            for (let i = 0; i < retries; i++) {
+                try {
+                    const controller = new AbortController();
+                    const timeout = setTimeout(() => controller.abort(), 25000);
+                    await fetch(`${API_URL}/api/health`, { signal: controller.signal });
+                    clearTimeout(timeout);
+                    return true;
+                } catch (err) {
+                    // ignore and retry after a delay
+                    await new Promise(r => setTimeout(r, delayMs));
+                }
+            }
+            return false;
+        }
 
         async function checkHealth() {
             try {
@@ -532,8 +549,10 @@
             loadCalibrationStatus();
         });
 
-        // Load on page load
+        // Load on page load. Start a silent warm-up ping so the backend wakes before scans.
         window.addEventListener('load', () => {
+            // fire-and-forget warm-up to reduce first-request cold starts
+            warmUpBackend();
             checkHealth();
             loadAnimalTypes();
             loadCalibrationStatus();
