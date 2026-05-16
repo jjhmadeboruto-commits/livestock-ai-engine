@@ -176,7 +176,7 @@ def estimate_weight() -> Response:
                     processor.pixel_to_cm_ratio = val
                     session_calibration[session_id] = val
             except (ValueError, TypeError):
-                return jsonify({'error': 'pixel_ratio must be a positive number.', 'error_type': 'invalid_pixel_ratio'}), 400
+                pass
         if reference_cm and reference_pixels:
             try:
                 ref_cm_val = float(reference_cm)
@@ -184,10 +184,8 @@ def estimate_weight() -> Response:
                 if ref_cm_val > 0 and ref_px_val > 0:
                     processor.calibrate_pixel_ratio(ref_cm_val, ref_px_val)
                     session_calibration[session_id] = processor.pixel_to_cm_ratio
-                else:
-                    return jsonify({'error': 'reference_cm and reference_pixels must be greater than zero.', 'error_type': 'invalid_reference'}), 400
             except (ValueError, TypeError):
-                return jsonify({'error': 'reference_cm and reference_pixels must be numbers.', 'error_type': 'invalid_reference'}), 400
+                pass
         if 'image' not in request.files or request.files['image'].filename == '':
             return jsonify({
                 'status': 'error',
