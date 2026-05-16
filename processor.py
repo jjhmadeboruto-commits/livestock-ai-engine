@@ -55,6 +55,11 @@ class AnimalProcessor:
         }
     }
 
+    # Class-level cached MediaPipe objects to avoid re-loading models per-request
+    _mp_pose = None
+    _drawing_utils = None
+    _pose_instance = None
+
     def __init__(self, pixel_to_cm_ratio: float = 0.264, animal_type: str = "dairy_cow") -> None:
         """Initialize MediaPipe Pose and scaling configuration.
         
@@ -67,33 +72,42 @@ class AnimalProcessor:
         if self.animal_type not in self.LIVESTOCK_CALIBRATION:
             self.animal_type = "dairy_cow"
 
-        # Lazy import MediaPipe so the module import doesn't crash the app
-        mp = None
-        mp_solutions = None
-        try:
-            mp = importlib.import_module('mediapipe')
-            mp_solutions = getattr(mp, 'solutions', None)
-        except Exception:
+        # Lazy import MediaPipe and cache heavy objects at the class level so
+        # subsequent requests reuse the loaded model and drawing utilities.
+        if not (self.__class__._mp_pose and self.__class__._pose_instance and self.__class__._drawing_utils):
             mp = None
-
-        if mp_solutions is None:
+            mp_solutions = None
             try:
-                mp_solutions = importlib.import_module('mediapipe.python.solutions')
+                mp = importlib.import_module('mediapipe')
+                mp_solutions = getattr(mp, 'solutions', None)
             except Exception:
-                mp_solutions = None
+                mp = None
 
-        if mp_solutions is None:
-            try:
-                mp_python = importlib.import_module('mediapipe.python')
-                mp_solutions = getattr(mp_python, 'solutions', None)
-            except Exception as err:
-                raise ImportError(
-                    'Could not import MediaPipe solutions from mediapipe or mediapipe.python'
-                ) from err
+            if mp_solutions is None:
+                try:
+                    mp_solutions = importlib.import_module('mediapipe.python.solutions')
+                except Exception:
+                    mp_solutions = None
 
-        self.mp_pose = mp_solutions.pose
-        self.pose = self.mp_pose.Pose(static_image_mode=True)
-        self.drawing_utils = mp_solutions.drawing_utils
+            if mp_solutions is None:
+                try:
+                    mp_python = importlib.import_module('mediapipe.python')
+                    mp_solutions = getattr(mp_python, 'solutions', None)
+                except Exception as err:
+                    raise ImportError(
+                        'Could not import MediaPipe solutions from mediapipe or mediapipe.python'
+                    ) from err
+
+            # Cache the pose class and drawing utils and create a single Pose instance
+            self.__class__._mp_pose = mp_solutions.pose
+            self.__class__._drawing_utils = mp_solutions.drawing_utils
+            # Creating a single Pose() instance avoids re-loading weights on every request.
+            self.__class__._pose_instance = self.__class__._mp_pose.Pose(static_image_mode=True)
+
+        # Instance-level references point to the cached class objects.
+        self.mp_pose = self.__class__._mp_pose
+        self.pose = self.__class__._pose_instance
+        self.drawing_utils = self.__class__._drawing_utils
 
     def process(self, image_bgr: np.ndarray) -> Optional[Dict[str, object]]:
         """Estimate animal weight from a BGR image and annotate detected landmarks.
