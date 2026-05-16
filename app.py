@@ -90,6 +90,14 @@ def health():
     return jsonify({"status": "ok"}), 200
 
 
+@app.route('/')
+def index():
+    return jsonify({
+        'status': 'live',
+        'message': 'LivestockAI service. Use /api/health or /api/estimate-weight'
+    }), 200
+
+
 @app.route('/api/debug-mediapipe', methods=['GET'])
 def debug_mediapipe() -> Response:
     mp_spec = importlib.util.find_spec('mediapipe')
