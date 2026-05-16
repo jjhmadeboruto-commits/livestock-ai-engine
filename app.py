@@ -140,25 +140,49 @@ def estimate_weight() -> Response:
     except ImportError as e:
         return jsonify({'error': 'MediaPipe is not available on the server.', 'details': str(e), 'error_type': 'mediapipe_unavailable'}), 500
 
-    # Apply session calibration if available
-    if session_id in session_calibration:
-        processor.pixel_to_cm_ratio = session_calibration[session_id]
+    # Avoid mutating shared processor state: save original ratio and restore after processing
+    original_pixel_ratio = processor.pixel_to_cm_ratio
+    try:
+        # Apply session calibration if available
+        if session_id in session_calibration:
+            processor.pixel_to_cm_ratio = session_calibration[session_id]
 
-    if pixel_ratio:
-        try:
-            processor.pixel_to_cm_ratio = float(pixel_ratio)
-            session_calibration[session_id] = float(pixel_ratio)
-        except (ValueError, TypeError):
-            return jsonify({'error': 'pixel_ratio must be a number.', 'error_type': 'invalid_pixel_ratio'}), 400
+        if pixel_ratio:
+            try:
+                processor.pixel_to_cm_ratio = float(pixel_ratio)
+                session_calibration[session_id] = float(pixel_ratio)
+            except (ValueError, TypeError):
+                return jsonify({'error': 'pixel_ratio must be a number.', 'error_type': 'invalid_pixel_ratio'}), 400
 
-    if reference_cm and reference_pixels:
-        try:
-            ref_cm_val = float(reference_cm)
-            ref_px_val = float(reference_pixels)
-            processor.calibrate_pixel_ratio(ref_cm_val, ref_px_val)
-            session_calibration[session_id] = processor.pixel_to_cm_ratio
-        except (ValueError, TypeError):
-            return jsonify({'error': 'reference_cm and reference_pixels must be numbers.', 'error_type': 'invalid_reference'}), 400
+        if reference_cm and reference_pixels:
+            try:
+                ref_cm_val = float(reference_cm)
+                ref_px_val = float(reference_pixels)
+                # Use a temporary processor calibration for this request
+                processor.calibrate_pixel_ratio(ref_cm_val, ref_px_val)
+                session_calibration[session_id] = processor.pixel_to_cm_ratio
+            except (ValueError, TypeError):
+                return jsonify({'error': 'reference_cm and reference_pixels must be numbers.', 'error_type': 'invalid_reference'}), 400
+
+        # Proceed with handling the uploaded image and processing below
+        if 'image' not in request.files:
+            return jsonify({'error': 'No image file provided.', 'error_type': 'no_image'}), 400
+
+        image_file = request.files['image']
+        if image_file.filename == '':
+            return jsonify({'error': 'No image file provided.', 'error_type': 'empty_filename'}), 400
+
+        image = _read_image_from_file(image_file)
+        if image is None:
+            return jsonify({'error': 'Invalid image data. Please upload a valid JPEG or PNG.', 'error_type': 'invalid_image'}), 400
+
+        # Assess image quality
+        quality_info = _assess_image_quality(image)
+
+        result = processor.process(image)
+    finally:
+        # Restore original processor pixel ratio to avoid cross-request leakage
+        processor.pixel_to_cm_ratio = original_pixel_ratio
 
     if 'image' not in request.files:
         return jsonify({'error': 'No image file provided.', 'error_type': 'no_image'}), 400
@@ -171,10 +195,7 @@ def estimate_weight() -> Response:
     if image is None:
         return jsonify({'error': 'Invalid image data. Please upload a valid JPEG or PNG.', 'error_type': 'invalid_image'}), 400
 
-    # Assess image quality
-    quality_info = _assess_image_quality(image)
-
-    result = processor.process(image)
+    
     if result is None:
         guidance = [
             "Ensure the animal is standing in a clear side profile.",
