@@ -20,17 +20,20 @@ scan_history = []
 
 def _read_image_from_file(file_storage) -> np.ndarray:
     """Read an uploaded file into an OpenCV BGR image."""
-    file_stream = BytesIO(file_storage.read())
-    file_bytes = np.frombuffer(file_stream.getvalue(), dtype=np.uint8)
-    if file_bytes.size == 0:
+    file_bytes = file_storage.read()
+    if not file_bytes:
         return None
+
+    file_array = np.frombuffer(file_bytes, dtype=np.uint8)
+    image = cv2.imdecode(file_array, cv2.IMREAD_COLOR)
+    if image is not None:
+        return image
 
     try:
-        image = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
+        fallback_array = np.frombuffer(bytearray(file_bytes), dtype=np.uint8)
+        return cv2.imdecode(fallback_array, cv2.IMREAD_COLOR)
     except cv2.error:
         return None
-
-    return image
 
 
 def _encode_image_to_base64(image: np.ndarray) -> str:
