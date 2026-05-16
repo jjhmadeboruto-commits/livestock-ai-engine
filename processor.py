@@ -122,7 +122,17 @@ class AnimalProcessor:
 
     def _fallback_contour_detection(self, image_bgr: np.ndarray) -> Optional[Tuple[int, int, int, int]]:
         """Memory-efficient fallback using OpenCV contours instead of heavy YOLO models."""
-        gray = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2GRAY)
+        # Downscale for performance to prevent CPU timeouts on large images
+        height, width = image_bgr.shape[:2]
+        max_dim = 640.0
+        scale = 1.0
+        if max(height, width) > max_dim:
+            scale = max_dim / max(height, width)
+            proc_image = cv2.resize(image_bgr, (int(width * scale), int(height * scale)))
+        else:
+            proc_image = image_bgr
+            
+        gray = cv2.cvtColor(proc_image, cv2.COLOR_BGR2GRAY)
         blur = cv2.GaussianBlur(gray, (5, 5), 0)
         # Apply thresholding
         _, thresh = cv2.threshold(blur, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
@@ -136,8 +146,14 @@ class AnimalProcessor:
         largest_contour = max(contours, key=cv2.contourArea)
         x, y, w, h = cv2.boundingRect(largest_contour)
         
+        # Scale bounding box back to original image size
+        x = int(x / scale)
+        y = int(y / scale)
+        w = int(w / scale)
+        h = int(h / scale)
+        
         # Ignore if the contour is too small (e.g. noise)
-        image_area = image_bgr.shape[0] * image_bgr.shape[1]
+        image_area = width * height
         if (w * h) < (image_area * 0.05):
             return None
             
@@ -179,8 +195,8 @@ class AnimalProcessor:
                     hip_px = self._normalized_to_pixel(left_hip, image_width, image_height)
                     heel_px = self._normalized_to_pixel(left_heel, image_width, image_height)
 
-                    body_length_px = self._euclidean_distance(shoulder_px, hip_px)
-                    body_height_px = self._euclidean_distance(hip_px, heel_px)
+                    body_length_px = max(1.0, self._euclidean_distance(shoulder_px, hip_px))
+                    body_height_px = max(1.0, self._euclidean_distance(hip_px, heel_px))
                     self._draw_pose(annotated_image, results_mp)
                     confidence_score = float(np.mean([left_shoulder.visibility, left_hip.visibility, left_heel.visibility]))
                     method_used = 'mediapipe'

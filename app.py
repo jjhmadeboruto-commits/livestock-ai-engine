@@ -171,10 +171,12 @@ def estimate_weight() -> Response:
             processor.pixel_to_cm_ratio = session_calibration[session_id]
         if pixel_ratio:
             try:
-                processor.pixel_to_cm_ratio = float(pixel_ratio)
-                session_calibration[session_id] = float(pixel_ratio)
+                val = float(pixel_ratio)
+                if val > 0:
+                    processor.pixel_to_cm_ratio = val
+                    session_calibration[session_id] = val
             except (ValueError, TypeError):
-                return jsonify({'error': 'pixel_ratio must be a number.', 'error_type': 'invalid_pixel_ratio'}), 400
+                return jsonify({'error': 'pixel_ratio must be a positive number.', 'error_type': 'invalid_pixel_ratio'}), 400
         if reference_cm and reference_pixels:
             try:
                 ref_cm_val = float(reference_cm)
