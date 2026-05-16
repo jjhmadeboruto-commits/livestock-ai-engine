@@ -7,8 +7,12 @@ import cv2
 import numpy as np
 from flask import Flask, Response, jsonify, request
 from flask_cors import CORS
-
 from processor import AnimalProcessor
+try:
+    from ultralytics import YOLO
+    yolo_model = YOLO('yolov8n.pt')  # Use the nano model for demo; replace with custom weights for production
+except ImportError:
+    yolo_model = None
 
 app = Flask(__name__)
 CORS(app)
@@ -140,14 +144,13 @@ def estimate_weight() -> Response:
         - farm_name: Name of the farm
     """
     animal_type = request.args.get('animal_type', 'dairy_cow')
-    SUPPORTED_TYPES = ["dairy_cow"]
+    SUPPORTED_TYPES = ["dairy_cow", "pig", "goat", "sheep", "donkey", "poultry"]
     if animal_type not in SUPPORTED_TYPES:
         return jsonify({
             'status': 'error',
             'message': (
                 f"Animal type '{animal_type}' is not supported. "
-                "This backend currently only supports 'dairy_cow' because the model is based on human/cow pose estimation. "
-                "For other animals, a dedicated model (YOLO, DeepLabCut, Animal Kingdom, etc.) is required."
+                f"Supported types: {SUPPORTED_TYPES}"
             ),
             'error_type': 'unsupported_animal_type',
             'supported_types': SUPPORTED_TYPES
@@ -164,41 +167,32 @@ def estimate_weight() -> Response:
     except ValueError as e:
         return jsonify({'error': str(e), 'error_type': 'invalid_animal_type'}), 400
     except ImportError as e:
-        return jsonify({'error': 'MediaPipe is not available on the server.', 'details': str(e), 'error_type': 'mediapipe_unavailable'}), 500
+        return jsonify({'error': 'MediaPipe/YOLO is not available on the server.', 'details': str(e), 'error_type': 'model_unavailable'}), 500
 
-    # Avoid mutating shared processor state: save original ratio and restore after processing
     original_pixel_ratio = processor.pixel_to_cm_ratio
     try:
-        # Apply session calibration if available
         if session_id in session_calibration:
             processor.pixel_to_cm_ratio = session_calibration[session_id]
-
         if pixel_ratio:
             try:
                 processor.pixel_to_cm_ratio = float(pixel_ratio)
                 session_calibration[session_id] = float(pixel_ratio)
             except (ValueError, TypeError):
                 return jsonify({'error': 'pixel_ratio must be a number.', 'error_type': 'invalid_pixel_ratio'}), 400
-
         if reference_cm and reference_pixels:
             try:
                 ref_cm_val = float(reference_cm)
                 ref_px_val = float(reference_pixels)
-                # Use a temporary processor calibration for this request
                 processor.calibrate_pixel_ratio(ref_cm_val, ref_px_val)
                 session_calibration[session_id] = processor.pixel_to_cm_ratio
             except (ValueError, TypeError):
                 return jsonify({'error': 'reference_cm and reference_pixels must be numbers.', 'error_type': 'invalid_reference'}), 400
-
-        # Proceed with handling the uploaded image and processing below
-
         if 'image' not in request.files or request.files['image'].filename == '':
             return jsonify({
                 'status': 'error',
                 'message': 'No image provided',
                 'error_type': 'no_image'
             }), 400
-
         image_file = request.files['image']
         image_file.stream.seek(0)
         file_bytes = image_file.stream.read()
@@ -209,7 +203,6 @@ def estimate_weight() -> Response:
                 'error_type': 'invalid_image',
                 'file_size': 0
             }), 400
-
         image = _read_image_from_bytes(file_bytes)
         if image is None:
             signature = list(file_bytes[:8])
@@ -220,15 +213,11 @@ def estimate_weight() -> Response:
                 'file_size': len(file_bytes),
                 'signature': signature
             }), 400
-
-        # Assess image quality
         quality_info = _assess_image_quality(image)
-
         result = processor.process(image)
     finally:
-        # Restore original processor pixel ratio to avoid cross-request leakage
         processor.pixel_to_cm_ratio = original_pixel_ratio
-
+        
     if result is None:
         guidance = [
             "Ensure the animal is standing in a clear side profile.",
@@ -239,17 +228,16 @@ def estimate_weight() -> Response:
         return jsonify({
             'status': 'error',
             'success': False,
-            'message': 'Livestock posture not recognized. Could not detect animal pose.',
-            'error_type': 'pose_detection_failed',
+            'message': 'Livestock posture not recognized. Could not detect animal pose or bounding box.',
+            'error_type': 'detection_failed',
             'guidance': guidance,
             'image_quality': quality_info
         }), 422
-
+        
     annotated_b64 = _encode_image_to_base64(result['annotated_image'])
-
-    # Add weight sanity warnings if the computed value falls outside the expected range.
+    method_used = result.get('method', 'unknown')
     guidance = [
-        f"Animal identified as {result['animal_type']}.",
+        f"Animal identified as {result['animal_type']} (using {method_used.upper()}).",
         f"Confidence: {round(result['confidence_score']*100, 1)}% - {'High' if result['confidence_score'] > 0.8 else 'Moderate'}",
         "For best accuracy, take a side-profile photo of the animal.",
         "Include a reference object (ruler/tape) in future photos."
@@ -263,8 +251,7 @@ def estimate_weight() -> Response:
         guidance.append(
             "Check that the selected animal type matches the photo and review calibration measurements."
         )
-
-    # Store in scan history
+        
     scan_record = {
         'timestamp': datetime.now().isoformat(),
         'animal_name': animal_name,
@@ -274,10 +261,11 @@ def estimate_weight() -> Response:
         'body_length': result['body_length'],
         'body_height': result['body_height'],
         'confidence_score': result['confidence_score'],
-        'within_expected_range': result.get('within_expected_range', True)
+        'within_expected_range': result.get('within_expected_range', True),
+        'method': method_used
     }
     scan_history.append(scan_record)
-
+    
     return jsonify({
         'status': 'success',
         'success': True,
@@ -293,7 +281,8 @@ def estimate_weight() -> Response:
         'within_expected_range': result.get('within_expected_range'),
         'guidance': guidance,
         'annotated_image': annotated_b64,
-        'filename': image_file.filename
+        'filename': image_file.filename,
+        'method': method_used
     }), 200
 
 
