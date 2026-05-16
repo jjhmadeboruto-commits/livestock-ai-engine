@@ -22,7 +22,14 @@ def _read_image_from_file(file_storage) -> np.ndarray:
     """Read an uploaded file into an OpenCV BGR image."""
     file_stream = BytesIO(file_storage.read())
     file_bytes = np.frombuffer(file_stream.getvalue(), dtype=np.uint8)
-    image = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
+    if file_bytes.size == 0:
+        return None
+
+    try:
+        image = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
+    except cv2.error:
+        return None
+
     return image
 
 
