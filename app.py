@@ -191,18 +191,6 @@ def estimate_weight() -> Response:
         # Restore original processor pixel ratio to avoid cross-request leakage
         processor.pixel_to_cm_ratio = original_pixel_ratio
 
-    if 'image' not in request.files:
-        return jsonify({'error': 'No image file provided.', 'error_type': 'no_image'}), 400
-
-    image_file = request.files['image']
-    if image_file.filename == '':
-        return jsonify({'error': 'No image file provided.', 'error_type': 'empty_filename'}), 400
-
-    image = _read_image_from_file(image_file)
-    if image is None:
-        return jsonify({'error': 'Invalid image data. Please upload a valid JPEG or PNG.', 'error_type': 'invalid_image'}), 400
-
-    
     if result is None:
         guidance = [
             "Ensure the animal is standing in a clear side profile.",
