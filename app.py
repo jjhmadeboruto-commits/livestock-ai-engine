@@ -140,6 +140,14 @@ def estimate_weight() -> Response:
         - farm_name: Name of the farm
     """
     animal_type = request.args.get('animal_type', 'dairy_cow')
+    SUPPORTED_TYPES = ["dairy_cow", "pig", "poultry", "goat", "sheep", "donkey"]
+    if animal_type not in SUPPORTED_TYPES:
+        return jsonify({
+            'status': 'error',
+            'message': f'Unsupported animal_type: {animal_type}',
+            'error_type': 'invalid_animal_type',
+            'supported_types': SUPPORTED_TYPES
+        }), 400
     session_id = request.args.get('session_id', 'default')
     pixel_ratio = request.form.get('pixel_ratio')
     reference_cm = request.form.get('reference_cm')
@@ -281,6 +289,7 @@ def estimate_weight() -> Response:
         'within_expected_range': result.get('within_expected_range'),
         'guidance': guidance,
         'annotated_image': annotated_b64,
+        'filename': image_file.filename
     }), 200
 
 
