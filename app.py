@@ -216,11 +216,12 @@ def estimate_weight() -> Response:
             "Try taking a new photo with better lighting."
         ]
         return jsonify({
+            'success': False,
             'error': 'Livestock posture not recognized. Could not detect animal pose.',
             'error_type': 'pose_detection_failed',
             'guidance': guidance,
             'image_quality': quality_info
-        }), 400
+        }), 200
 
     annotated_b64 = _encode_image_to_base64(result['annotated_image'])
 
