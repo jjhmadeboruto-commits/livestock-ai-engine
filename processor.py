@@ -229,7 +229,7 @@ class AnimalProcessor:
         }
 
     def _normalized_to_pixel(
-        self, landmark: mp.framework.formats.landmark_pb2.NormalizedLandmark, image_width: int, image_height: int
+        self, landmark: Any, image_width: int, image_height: int
     ) -> Tuple[int, int]:
         """Convert normalized landmark coordinates to pixel coordinates."""
         x_px = int(max(0.0, min(1.0, landmark.x)) * image_width)
@@ -287,7 +287,7 @@ class AnimalProcessor:
         """Get information about all available livestock types and their current calibration."""
         return cls.LIVESTOCK_CALIBRATION.copy()
 
-    def _is_landmark_valid(self, landmark: mp.framework.formats.landmark_pb2.NormalizedLandmark) -> bool:
+    def _is_landmark_valid(self, landmark: Any) -> bool:
         """Check whether a landmark is sufficiently visible and within normalized bounds."""
         return landmark.visibility > 0.4 and 0.0 <= landmark.x <= 1.0 and 0.0 <= landmark.y <= 1.0
 
