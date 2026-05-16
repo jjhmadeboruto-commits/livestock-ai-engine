@@ -181,8 +181,11 @@ def estimate_weight() -> Response:
             try:
                 ref_cm_val = float(reference_cm)
                 ref_px_val = float(reference_pixels)
-                processor.calibrate_pixel_ratio(ref_cm_val, ref_px_val)
-                session_calibration[session_id] = processor.pixel_to_cm_ratio
+                if ref_cm_val > 0 and ref_px_val > 0:
+                    processor.calibrate_pixel_ratio(ref_cm_val, ref_px_val)
+                    session_calibration[session_id] = processor.pixel_to_cm_ratio
+                else:
+                    return jsonify({'error': 'reference_cm and reference_pixels must be greater than zero.', 'error_type': 'invalid_reference'}), 400
             except (ValueError, TypeError):
                 return jsonify({'error': 'reference_cm and reference_pixels must be numbers.', 'error_type': 'invalid_reference'}), 400
         if 'image' not in request.files or request.files['image'].filename == '':

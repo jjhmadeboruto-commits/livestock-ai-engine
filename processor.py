@@ -259,7 +259,7 @@ class AnimalProcessor:
 
     def _get_pixel_to_cm_ratio(self) -> float:
         """Return the active pixel-to-centimeter conversion ratio."""
-        return self.pixel_to_cm_ratio
+        return max(0.001, self.pixel_to_cm_ratio)
 
     def set_animal_type(self, animal_type: str) -> None:
         """Set the animal type for weight calibration.
