@@ -179,22 +179,31 @@ def estimate_weight() -> Response:
                 return jsonify({'error': 'reference_cm and reference_pixels must be numbers.', 'error_type': 'invalid_reference'}), 400
 
         # Proceed with handling the uploaded image and processing below
-        if 'image' not in request.files:
-            return jsonify({'error': 'No image file provided.', 'error_type': 'no_image'}), 400
+
+        if 'image' not in request.files or request.files['image'].filename == '':
+            return jsonify({
+                'status': 'error',
+                'message': 'No image provided',
+                'error_type': 'no_image'
+            }), 400
 
         image_file = request.files['image']
-        if image_file.filename == '':
-            return jsonify({'error': 'No image file provided.', 'error_type': 'empty_filename'}), 400
-
-        file_bytes = image_file.read()
+        image_file.stream.seek(0)
+        file_bytes = image_file.stream.read()
         if not file_bytes:
-            return jsonify({'error': 'Invalid image data. Please upload a valid JPEG or PNG.', 'error_type': 'invalid_image', 'file_size': 0}), 400
+            return jsonify({
+                'status': 'error',
+                'message': 'Invalid image data. Please upload a valid JPEG or PNG.',
+                'error_type': 'invalid_image',
+                'file_size': 0
+            }), 400
 
         image = _read_image_from_bytes(file_bytes)
         if image is None:
             signature = list(file_bytes[:8])
             return jsonify({
-                'error': 'Invalid image data. Please upload a valid JPEG or PNG.',
+                'status': 'error',
+                'message': 'Invalid image data. Please upload a valid JPEG or PNG.',
                 'error_type': 'invalid_image',
                 'file_size': len(file_bytes),
                 'signature': signature
@@ -216,12 +225,13 @@ def estimate_weight() -> Response:
             "Try taking a new photo with better lighting."
         ]
         return jsonify({
+            'status': 'error',
             'success': False,
-            'error': 'Livestock posture not recognized. Could not detect animal pose.',
+            'message': 'Livestock posture not recognized. Could not detect animal pose.',
             'error_type': 'pose_detection_failed',
             'guidance': guidance,
             'image_quality': quality_info
-        }), 200
+        }), 422
 
     annotated_b64 = _encode_image_to_base64(result['annotated_image'])
 
@@ -257,6 +267,7 @@ def estimate_weight() -> Response:
     scan_history.append(scan_record)
 
     return jsonify({
+        'status': 'success',
         'success': True,
         'weight': result['weight'],
         'body_length': result['body_length'],
