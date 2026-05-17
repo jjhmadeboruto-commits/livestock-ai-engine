@@ -12,12 +12,27 @@ from services.processor import AnimalProcessor
 app = Flask(__name__)
 
 # Explicit CORS allowlist for frontend origins in development and production
-CORS(app, origins=[
+ALLOWED_ORIGINS = {
     "http://localhost:5173",
     "https://livestock-ai.vercel.app",
     "https://livestock-ai-frontend.vercel.app",
-    "https://livestock-ai-engine.onrender.com"
-])
+    "https://livestock-ai-engine.onrender.com",
+}
+
+# Apply flask-cors for normal request/response flow
+CORS(app, origins=list(ALLOWED_ORIGINS))
+
+
+# Ensure CORS headers are always present, even on error responses
+@app.after_request
+def _ensure_cors_headers(response):
+    origin = request.headers.get("Origin")
+    if origin in ALLOWED_ORIGINS:
+        response.headers["Access-Control-Allow-Origin"] = origin
+    # Always allow common methods and headers for API usage
+    response.headers.setdefault("Access-Control-Allow-Methods", "GET,POST,OPTIONS,PUT,DELETE,PATCH")
+    response.headers.setdefault("Access-Control-Allow-Headers", "Content-Type,Authorization")
+    return response
 
 # Session storage for calibration
 session_calibration = {}
