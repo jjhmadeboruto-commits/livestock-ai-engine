@@ -309,7 +309,7 @@ def health_check() -> Response:
     return jsonify({
         'status': 'healthy',
         'version': '1.1.0',
-        'deploy_version': '2026-05-17-01',
+        'deploy_version': '2026-05-17-02',
         'service': 'LivestockAI Weight Estimation API',
         'timestamp': datetime.now().isoformat(),
         'features': {
