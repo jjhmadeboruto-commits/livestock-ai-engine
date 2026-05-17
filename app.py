@@ -7,7 +7,7 @@ import cv2
 import numpy as np
 from flask import Flask, Response, jsonify, request
 from flask_cors import CORS
-from processor import AnimalProcessor
+from services.processor import AnimalProcessor
 
 app = Flask(__name__)
 
