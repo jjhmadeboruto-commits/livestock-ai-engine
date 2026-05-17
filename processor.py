@@ -6,15 +6,26 @@ import cv2
 import numpy as np
 from typing import Dict, Optional, Tuple
 
-try:
-    from ultralytics import YOLO
-except ImportError:
-    YOLO = None  # type: ignore[misc, assignment]
-
 # YOLO + PyTorch often OOM on Render free tier; contour fallback still estimates weight.
 _YOLO_OPT_OUT = os.environ.get("DISABLE_YOLO", "").lower() in ("1", "true", "yes")
 if os.environ.get("RENDER") and os.environ.get("ENABLE_YOLO", "").lower() not in ("1", "true", "yes"):
     _YOLO_OPT_OUT = True
+
+_YOLO_CLASS = None
+
+
+def _get_yolo_class():
+    """Import ultralytics only when YOLO is enabled (avoids loading torch on Render)."""
+    global _YOLO_CLASS
+    if _YOLO_OPT_OUT:
+        return None
+    if _YOLO_CLASS is None:
+        try:
+            from ultralytics import YOLO as _YOLO_CLASS_IMPORT
+            _YOLO_CLASS = _YOLO_CLASS_IMPORT
+        except ImportError:
+            pass
+    return _YOLO_CLASS
 
 
 class AnimalProcessor:
@@ -49,7 +60,7 @@ class AnimalProcessor:
 
     @classmethod
     def is_yolo_available(cls) -> bool:
-        if YOLO is None or _YOLO_OPT_OUT or cls._yolo_load_failed:
+        if _get_yolo_class() is None or _YOLO_OPT_OUT or cls._yolo_load_failed:
             return False
         if cls._yolo_model is not None:
             return True
@@ -64,10 +75,11 @@ class AnimalProcessor:
         if cls._yolo_load_failed or _YOLO_OPT_OUT:
             return None
         if cls._yolo_model is None:
-            if YOLO is None:
+            yolo_cls = _get_yolo_class()
+            if yolo_cls is None:
                 return None
             try:
-                cls._yolo_model = YOLO("yolov8n.pt")
+                cls._yolo_model = yolo_cls("yolov8n.pt")
             except Exception:
                 cls._yolo_load_failed = True
                 cls._yolo_model = None
