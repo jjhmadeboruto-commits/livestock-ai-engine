@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import cv2
 import numpy as np
+import os
+import logging
 from typing import Any, Dict, Optional, Tuple
 
 
@@ -27,7 +29,7 @@ class AnimalProcessor:
     # Class-level cached YOLO model
     _yolo_model = None
 
-    def __init__(self, pixel_to_cm_ratio: float = 0.05, animal_type: str = "dairy_cow") -> None:
+    def __init__(self, pixel_to_cm_ratio: float = 0.15, animal_type: str = "dairy_cow") -> None:
         self.pixel_to_cm_ratio = pixel_to_cm_ratio
         self.animal_type = animal_type.lower()
         if self.animal_type not in self.LIVESTOCK_CALIBRATION:
@@ -37,10 +39,12 @@ class AnimalProcessor:
         if self.__class__._yolo_model is None:
             try:
                 from ultralytics import YOLO
-                self.__class__._yolo_model = YOLO("yolov8n.pt")  # downloads ~6MB on first run
+                model_path = os.environ.get("MODEL_PATH", "models/yolov8n.pt")
+                self.__class__._yolo_model = YOLO(model_path)
+                logging.info(f"YOLO loaded from {model_path}")
             except Exception as e:
                 self.__class__._yolo_model = False  # mark as unavailable so we don't retry
-                print(f"[AnimalProcessor] YOLOv8 unavailable: {e}")
+                logging.error(f"[AnimalProcessor] YOLOv8 unavailable: {e}")
 
         self.model = self.__class__._yolo_model if self.__class__._yolo_model else None
 
@@ -164,7 +168,7 @@ class AnimalProcessor:
         try:
             results = self.model(image_bgr, verbose=False, conf=0.25)[0]
         except Exception as e:
-            print(f"[AnimalProcessor] YOLO inference error: {e}")
+            logging.error(f"[AnimalProcessor] YOLO inference error: {e}")
             return None
 
         best_box = None

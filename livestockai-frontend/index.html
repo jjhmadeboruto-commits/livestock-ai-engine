@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+ <head>
+  <meta charset="utf-8"/>
+  <link href="https://media.base44.com/images/public/6a06eb2af3834aa0506cb61f/e691f8e60_logo.png" rel="icon" type="image/svg+xml"/>
+  <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+  <link href="/manifest.json" rel="manifest"/>
+  <title>
+   LivestockScale AI
+  </title>
+  <script crossorigin="" src="/assets/index-DN-wla8G.js" type="module">
+  </script>
+  <link crossorigin="" href="/assets/index-0H2I7yWm.css" rel="stylesheet"/>
+  <script type="module">
+   if (window.self === window.top) {
+  let lastPath = "";
+  function getPageNameFromPath(path) {
+    const segments = path.split("/").filter(Boolean);
+    return segments[0] || null;
+  }
+  function trackPageView() {
+    const path = window.location.pathname;
+    if (path === lastPath) return;
+    lastPath = path;
+    const pageName = getPageNameFromPath(path) || "home";
+    const appId = "6a06eb2af3834aa0506cb61f";
+    if (!appId) return;
+    fetch(`/api/app-logs/${appId}/log-user-in-app/${pageName}`, {
+      method: "POST",
+    }).catch(() => {});
+  }
+  const originalPushState = history.pushState.bind(history);
+  history.pushState = function (...args) {
+    originalPushState(...args);
+    trackPageView();
+  };
+  const originalReplaceState = history.replaceState.bind(history);
+  history.replaceState = function (...args) {
+    originalReplaceState(...args);
+    trackPageView();
+  };
+  window.addEventListener("popstate", trackPageView);
+  trackPageView();
+}
+  </script>
+  <meta content="An intelligent computer vision platform that provides non-invasive weight estimation for livestock, optimizing farm productivity and health management through p" name="description"/>
+  <meta content="LivestockScale AI" property="og:title"/>
+  <meta content="An intelligent computer vision platform that provides non-invasive weight estimation for livestock, optimizing farm productivity and health management through p" property="og:description"/>
+  <meta content="https://media.base44.com/images/public/6a06eb2af3834aa0506cb61f/e691f8e60_logo.png/v1/fill/w_1200,h_630/e691f8e60_logo.png" property="og:image"/>
+  <meta content="https://livestock-scale-ai-.base44.app" property="og:url"/>
+  <meta content="website" property="og:type"/>
+  <meta content="LivestockScale AI" property="og:site_name"/>
+  <meta content="LivestockScale AI" name="twitter:title"/>
+  <meta content="An intelligent computer vision platform that provides non-invasive weight estimation for livestock, optimizing farm productivity and health management through p" name="twitter:description"/>
+  <meta content="https://media.base44.com/images/public/6a06eb2af3834aa0506cb61f/e691f8e60_logo.png/v1/fill/w_1200,h_630/e691f8e60_logo.png" name="twitter:image"/>
+  <meta content="summary_large_image" name="twitter:card"/>
+  <meta content="https://livestock-scale-ai-.base44.app" name="twitter:url"/>
+  <meta content="yes" name="mobile-web-app-capable"/>
+  <meta content="black" name="apple-mobile-web-app-status-bar-style"/>
+  <meta content="LivestockScale AI" name="apple-mobile-web-app-title"/>
+  <meta content="noindex, nofollow" name="robots"/>
+ </head>
+ <body>
+  <div id="root">
+  </div>
+ </body>
+</html>
