@@ -1,3 +1,6 @@
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch==2.2.2
+torchvision==0.17.2
 flask
 flask-cors
 opencv-python-headless==4.8.1.78

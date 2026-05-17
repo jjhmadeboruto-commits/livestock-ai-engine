@@ -39,7 +39,10 @@ class AnimalProcessor:
         if self.__class__._yolo_model is None:
             try:
                 from ultralytics import YOLO
-                model_path = os.environ.get("MODEL_PATH", "models/yolov8n.pt")
+                import os
+                BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+                default_model_path = os.path.join(BASE_DIR, "..", "models", "yolov8n.pt")
+                model_path = os.environ.get("MODEL_PATH", os.path.abspath(default_model_path))
                 self.__class__._yolo_model = YOLO(model_path)
                 logging.info(f"YOLO loaded from {model_path}")
             except Exception as e:
