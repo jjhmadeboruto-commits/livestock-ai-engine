@@ -1,0 +1,9 @@
+{
+  "name": "LiveStockAI",
+  "short_name": "LiveStockAI",
+  "start_url": ".",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "description": "Livestock weight estimation and management.",
+  "icons": []
+}
