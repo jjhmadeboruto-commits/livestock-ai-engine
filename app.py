@@ -125,8 +125,11 @@ def debug_mediapipe() -> Response:
     }), 200
 
 
-@app.route('/api/estimate-weight', methods=['POST'])
+@app.route('/api/estimate-weight', methods=['POST', 'OPTIONS'])
 def estimate_weight() -> Response:
+    if request.method == 'OPTIONS':
+        return jsonify({'status': 'ok'}), 200
+        
     """Handle POST image uploads and return livestock weight estimation.
 
     Query parameters:
@@ -467,6 +470,8 @@ def handle_internal_error(error):
 
 @app.errorhandler(Exception)
 def handle_unhandled_exception(error):
+    import traceback
+    traceback.print_exc()
     return jsonify({'success': False, 'error': 'unhandled_exception', 'message': str(error)}), 500
 
 
