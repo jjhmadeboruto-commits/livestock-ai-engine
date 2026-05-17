@@ -13,12 +13,12 @@ COPY requirements.txt .
 # We add the extra index url for CPU-only PyTorch to save space, but on HF Spaces you have 16GB so it handles it fine.
 RUN pip install --no-cache-dir torch torchvision --index-url https://download.pytorch.org/whl/cpu
 RUN pip install --no-cache-dir -r requirements.txt
-RUN pip install --no-cache-dir ultralytics
+RUN pip install --no-cache-dir ultralytics "numpy<2.0.0"
 
 # Ultralytics forcefully installs the GUI version of OpenCV (opencv-python).
 # We must uninstall it and reinstall the headless version to prevent libxcb/libgl runtime errors.
 RUN pip uninstall -y opencv-python opencv-python-headless && \
-    pip install --no-cache-dir opencv-python-headless==4.8.1.78
+    pip install --no-cache-dir opencv-python-headless==4.8.1.78 "numpy<2.0.0"
 
 # Copy the rest of the application
 COPY . .
