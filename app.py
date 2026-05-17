@@ -91,12 +91,12 @@ def _assess_image_quality(image: np.ndarray) -> dict:
         issues.append("Unusual aspect ratio. Take a side-profile photo.")
 
     return {
-        'quality_score': round(quality_score, 2),
-        'brightness': round(mean_brightness, 1),
-        'focus_quality': round(laplacian_var, 1),
-        'aspect_ratio': round(aspect_ratio, 2),
+        'quality_score': float(round(quality_score, 2)),
+        'brightness': float(round(mean_brightness, 1)),
+        'focus_quality': float(round(laplacian_var, 1)),
+        'aspect_ratio': float(round(aspect_ratio, 2)),
         'issues': issues,
-        'is_good_quality': quality_score >= 0.7
+        'is_good_quality': bool(quality_score >= 0.7)
     }
 
 

@@ -124,16 +124,16 @@ class AnimalProcessor:
             within_range = expected_min <= weight_kg <= expected_max
 
         return {
-            "weight":                round(weight_kg, 2),
-            "body_length":           round(length_cm, 2),
-            "body_height":           round(height_cm, 2),
-            "estimated_girth":       round(girth_cm, 2),
-            "animal_type":           calibration["name"],
-            "confidence_score":      round(confidence_score, 3),
+            "weight":                float(round(weight_kg, 2)),
+            "body_length":           float(round(length_cm, 2)),
+            "body_height":           float(round(height_cm, 2)),
+            "estimated_girth":       float(round(girth_cm, 2)),
+            "animal_type":           str(calibration["name"]),
+            "confidence_score":      float(round(confidence_score, 3)),
             "annotated_image":       annotated_image,
             "expected_weight_range": calibration.get("expected_range"),
-            "within_expected_range": within_range,
-            "method":                method_used,
+            "within_expected_range": bool(within_range),
+            "method":                str(method_used),
         }
 
     def calibrate_pixel_ratio(self, known_cm: float, measured_pixels: float) -> None:
