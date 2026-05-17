@@ -6,8 +6,13 @@ import cv2
 import numpy as np
 from flask import Flask, Response, jsonify, request
 from flask_cors import CORS
-from processor import AnimalProcessor
+from dotenv import load_dotenv
+import logging
 
+from services.processor import AnimalProcessor
+
+load_dotenv()
+logging.basicConfig(level=logging.INFO)
 
 app = Flask(__name__)
 CORS(app)
