@@ -16,6 +16,27 @@ CORS(app)
 session_calibration = {}
 scan_history = []
 
+# Maps Base44 UI labels to backend calibration keys.
+_ANIMAL_TYPE_ALIASES = {
+    "cattle": "dairy_cow",
+    "dairy_cow": "dairy_cow",
+    "cow": "dairy_cow",
+    "beef_cattle": "beef_cattle",
+    "young_cattle": "young_cattle",
+    "pig": "pig",
+    "poultry": "poultry",
+    "goat": "goat",
+    "sheep": "sheep",
+    "donkey": "donkey",
+}
+
+
+def _resolve_animal_type(raw: str | None) -> str:
+    if not raw:
+        return "dairy_cow"
+    key = raw.strip().lower().replace(" ", "_")
+    return _ANIMAL_TYPE_ALIASES.get(key, key)
+
 
 def _read_image_from_bytes(file_bytes: bytes) -> np.ndarray:
     """Decode raw image bytes into an OpenCV BGR image."""
@@ -126,8 +147,12 @@ def estimate_weight() -> Response:
         - animal_name: Name of the animal being scanned
         - farm_name: Name of the farm
     """
-    animal_type = request.args.get('animal_type', 'dairy_cow')
-    SUPPORTED_TYPES = ["dairy_cow", "pig", "goat", "sheep", "donkey", "poultry"]
+    animal_type = _resolve_animal_type(
+        request.args.get('animal_type')
+        or request.form.get('animal_type')
+        or request.form.get('animalType')
+    )
+    SUPPORTED_TYPES = ["dairy_cow", "pig", "goat", "sheep", "donkey", "poultry", "beef_cattle", "young_cattle"]
     if animal_type not in SUPPORTED_TYPES:
         return jsonify({
             'status': 'error',
@@ -274,6 +299,12 @@ def estimate_weight() -> Response:
         'estimated_girth': result['estimated_girth'],
         'animal_type': result['animal_type'],
         'confidence_score': result['confidence_score'],
+        # Base44 frontend field names (see livestock-scale-ai-.base44.app bundle)
+        'estimated_weight_kg': result['weight'],
+        'confidence_interval': result['confidence_score'],
+        'body_length_cm': result['body_length'],
+        'body_height_cm': result['body_height'],
+        'annotated_image_base64': annotated_b64,
         'pixel_to_cm_ratio': processor.pixel_to_cm_ratio,
         'image_quality': quality_info,
         'expected_weight_range': result.get('expected_weight_range'),
@@ -302,7 +333,7 @@ def health_check() -> Response:
     return jsonify({
         'status': 'healthy',
         'version': '1.0.0',
-        'deploy_version': '2026-05-17-contour',
+        'deploy_version': '2026-05-17-base44',
         'service': 'LivestockAI Weight Estimation API',
         'timestamp': datetime.now().isoformat(),
         'features': {
