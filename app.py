@@ -6,12 +6,15 @@ import cv2
 import numpy as np
 from flask import Flask, Response, jsonify, request
 from flask_cors import CORS
-from dotenv import load_dotenv
-import logging
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
 
+import logging
 from services.processor import AnimalProcessor
 
-load_dotenv()
 logging.basicConfig(level=logging.INFO)
 
 app = Flask(__name__)
