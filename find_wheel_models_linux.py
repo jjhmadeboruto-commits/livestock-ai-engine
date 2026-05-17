@@ -1,0 +1,7 @@
+import zipfile
+from pathlib import Path
+wheel = Path('mediapipe-0.10.35-py3-none-manylinux_2_28_x86_64.whl')
+with zipfile.ZipFile(wheel) as z:
+    for f in sorted(z.namelist()):
+        if f.endswith(('.tflite', '.task', '.lite', '.pb', '.model', '.builder')):
+            print(f)
