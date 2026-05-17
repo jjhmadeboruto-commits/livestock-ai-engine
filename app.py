@@ -3,8 +3,22 @@ from io import BytesIO
 from datetime import datetime
 import importlib.util
 
-import cv2
-import numpy as np
+@app.route('/api/estimate-weight', methods=['POST'])
+def estimate_weight() -> Response:
+    try:
+        return _estimate_weight_impl()
+    except Exception as e:
+        import traceback
+        print("[ERROR] /api/estimate-weight exception:", e)
+        traceback.print_exc()
+        return jsonify({
+            'status': 'error',
+            'message': 'Internal server error',
+            'error_type': 'internal_server_error',
+            'details': str(e)
+        }), 500
+
+def _estimate_weight_impl() -> Response:
 from flask import Flask, Response, jsonify, request
 from flask_cors import CORS
 from services.processor import AnimalProcessor
