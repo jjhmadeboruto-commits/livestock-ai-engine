@@ -1,61 +1,37 @@
 import base64
 from io import BytesIO
 from datetime import datetime
+import importlib.util
 
 import cv2
 import numpy as np
 from flask import Flask, Response, jsonify, request
 from flask_cors import CORS
-try:
-    from dotenv import load_dotenv
-    load_dotenv()
-except ImportError:
-    pass
-
-import logging
-from services.processor import AnimalProcessor
-
-logging.basicConfig(level=logging.INFO)
+from processor import AnimalProcessor
 
 app = Flask(__name__)
-CORS(app)
 
-# Session storage for calibration and scan history
+# Explicit CORS allowlist for frontend origins in development and production
+CORS(app, origins=[
+    "http://localhost:5173",
+    "https://livestock-ai.vercel.app",
+    "https://livestock-ai-frontend.vercel.app",
+    "https://livestock-ai-engine.onrender.com"
+])
+
+# Session storage for calibration
 session_calibration = {}
 scan_history = []
-
-# Maps Base44 UI labels to backend calibration keys.
-_ANIMAL_TYPE_ALIASES = {
-    "cattle": "dairy_cow",
-    "dairy_cow": "dairy_cow",
-    "cow": "dairy_cow",
-    "beef_cattle": "beef_cattle",
-    "young_cattle": "young_cattle",
-    "pig": "pig",
-    "poultry": "poultry",
-    "goat": "goat",
-    "sheep": "sheep",
-    "donkey": "donkey",
-}
-
-
-def _resolve_animal_type(raw: str | None) -> str:
-    if not raw:
-        return "dairy_cow"
-    key = raw.strip().lower().replace(" ", "_")
-    return _ANIMAL_TYPE_ALIASES.get(key, key)
 
 
 def _read_image_from_bytes(file_bytes: bytes) -> np.ndarray:
     """Decode raw image bytes into an OpenCV BGR image."""
     if not file_bytes:
         return None
-
     file_array = np.frombuffer(file_bytes, dtype=np.uint8)
     image = cv2.imdecode(file_array, cv2.IMREAD_COLOR)
     if image is not None:
         return image
-
     try:
         fallback_array = np.frombuffer(bytearray(file_bytes), dtype=np.uint8)
         return cv2.imdecode(fallback_array, cv2.IMREAD_COLOR)
@@ -63,60 +39,42 @@ def _read_image_from_bytes(file_bytes: bytes) -> np.ndarray:
         return None
 
 
-def _read_image_from_file(file_storage) -> np.ndarray:
-    """Read an uploaded file into an OpenCV BGR image."""
-    return _read_image_from_bytes(file_storage.read())
-
-
 def _encode_image_to_base64(image: np.ndarray) -> str:
     """Encode a BGR image to a Base64 PNG string."""
     success, encoded_image = cv2.imencode('.png', image)
     if not success:
         raise ValueError('Could not encode annotated image.')
-
     return base64.b64encode(encoded_image.tobytes()).decode('utf-8')
 
 
 def _assess_image_quality(image: np.ndarray) -> dict:
-    """Assess image quality for livestock weight estimation.
-    
-    Returns quality metrics and guidance for improvement.
-    """
+    """Assess image quality for livestock weight estimation."""
     height, width = image.shape[:2]
-    
-    # Check image dimensions
     aspect_ratio = width / height if height > 0 else 0
-    
-    # Check brightness (avoid overexposed/underexposed)
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
     mean_brightness = np.mean(gray)
     brightness_ok = 50 < mean_brightness < 200
-    
-    # Check contrast (Laplacian variance indicates focus quality)
     laplacian_var = cv2.Laplacian(gray, cv2.CV_64F).var()
     focus_ok = laplacian_var > 100
-    
+
     quality_score = 0.0
     issues = []
-    
+
     if brightness_ok:
         quality_score += 0.4
     else:
-        if mean_brightness <= 50:
-            issues.append("Image too dark. Increase lighting.")
-        else:
-            issues.append("Image too bright. Reduce glare.")
-    
+        issues.append("Image too dark." if mean_brightness <= 50 else "Image too bright.")
+
     if focus_ok:
         quality_score += 0.3
     else:
         issues.append("Image appears blurry. Take a clearer photo.")
-    
+
     if 0.5 < aspect_ratio < 2.0:
         quality_score += 0.3
     else:
         issues.append("Unusual aspect ratio. Take a side-profile photo.")
-    
+
     return {
         'quality_score': round(quality_score, 2),
         'brightness': round(mean_brightness, 1),
@@ -140,12 +98,24 @@ def index():
     }), 200
 
 
+@app.route('/api/debug-mediapipe', methods=['GET'])
+def debug_mediapipe() -> Response:
+    mp_spec = importlib.util.find_spec('mediapipe')
+    python_spec = importlib.util.find_spec('mediapipe.python')
+    return jsonify({
+        'mediapipe_file': mp_spec.origin if mp_spec else None,
+        'mediapipe_exists': mp_spec is not None,
+        'mediapipe_python_exists': python_spec is not None,
+        'mediapipe_python_origin': python_spec.origin if python_spec else None,
+    }), 200
+
+
 @app.route('/api/estimate-weight', methods=['POST'])
 def estimate_weight() -> Response:
     """Handle POST image uploads and return livestock weight estimation.
-    
+
     Query parameters:
-        - animal_type: Type of animal ('dairy_cow', 'beef_cattle', 'young_cattle', 'goat', 'sheep', 'donkey', 'poultry')
+        - animal_type: Type of animal ('dairy_cow', 'beef_cattle', 'young_cattle', 'goat', 'sheep', 'donkey', 'pig', 'poultry')
         - session_id: Optional session ID for tracking calibration
 
     Form fields (optional):
@@ -155,22 +125,16 @@ def estimate_weight() -> Response:
         - animal_name: Name of the animal being scanned
         - farm_name: Name of the farm
     """
-    animal_type = _resolve_animal_type(
-        request.args.get('animal_type')
-        or request.form.get('animal_type')
-        or request.form.get('animalType')
-    )
-    SUPPORTED_TYPES = ["dairy_cow", "pig", "goat", "sheep", "donkey", "poultry", "beef_cattle", "young_cattle"]
+    animal_type = request.args.get('animal_type', 'dairy_cow')
+    SUPPORTED_TYPES = list(AnimalProcessor.LIVESTOCK_CALIBRATION.keys())
     if animal_type not in SUPPORTED_TYPES:
         return jsonify({
             'status': 'error',
-            'message': (
-                f"Animal type '{animal_type}' is not supported. "
-                f"Supported types: {SUPPORTED_TYPES}"
-            ),
+            'message': f"Animal type '{animal_type}' is not supported. Supported types: {SUPPORTED_TYPES}",
             'error_type': 'unsupported_animal_type',
             'supported_types': SUPPORTED_TYPES
         }), 400
+
     session_id = request.args.get('session_id', 'default')
     pixel_ratio = request.form.get('pixel_ratio')
     reference_cm = request.form.get('reference_cm')
@@ -178,15 +142,20 @@ def estimate_weight() -> Response:
     animal_name = request.form.get('animal_name', 'Unknown')
     farm_name = request.form.get('farm_name', 'Unknown Farm')
 
+    # ── Build processor (ALL animal types go through AnimalProcessor / MediaPipe) ──
     try:
         processor = AnimalProcessor(animal_type=animal_type)
-    except ValueError as e:
-        return jsonify({'error': str(e), 'error_type': 'invalid_animal_type'}), 400
+    except (ValueError, ImportError) as e:
+        return jsonify({'status': 'error', 'error': str(e), 'error_type': 'processor_init_failed'}), 500
 
     original_pixel_ratio = processor.pixel_to_cm_ratio
+
     try:
+        # Apply session calibration
         if session_id in session_calibration:
             processor.pixel_to_cm_ratio = session_calibration[session_id]
+
+        # Apply per-request pixel_ratio override
         if pixel_ratio:
             try:
                 val = float(pixel_ratio)
@@ -195,6 +164,8 @@ def estimate_weight() -> Response:
                     session_calibration[session_id] = val
             except (ValueError, TypeError):
                 pass
+
+        # Apply reference-object calibration
         if reference_cm and reference_pixels:
             try:
                 ref_cm_val = float(reference_cm)
@@ -205,29 +176,14 @@ def estimate_weight() -> Response:
             except (ValueError, TypeError):
                 pass
 
-        min_ratio = 0.1
-        max_ratio = 1.0
-        ratio = processor.pixel_to_cm_ratio
-        if not (min_ratio <= ratio <= max_ratio):
-            return jsonify({
-                'status': 'error',
-                'message': (
-                    f'pixel_to_cm_ratio {ratio:.4f} is out of realistic range '
-                    f'({min_ratio}–{max_ratio} cm/pixel). Please calibrate using a reference object.'
-                ),
-                'error_type': 'invalid_pixel_to_cm_ratio',
-                'pixel_to_cm_ratio': ratio
-            }), 422
-
+        # Read image
         if 'image' not in request.files or request.files['image'].filename == '':
-            return jsonify({
-                'status': 'error',
-                'message': 'No image provided',
-                'error_type': 'no_image'
-            }), 400
+            return jsonify({'status': 'error', 'message': 'No image provided', 'error_type': 'no_image'}), 400
+
         image_file = request.files['image']
         image_file.stream.seek(0)
         file_bytes = image_file.stream.read()
+
         if not file_bytes:
             return jsonify({
                 'status': 'error',
@@ -235,43 +191,44 @@ def estimate_weight() -> Response:
                 'error_type': 'invalid_image',
                 'file_size': 0
             }), 400
+
         image = _read_image_from_bytes(file_bytes)
         if image is None:
-            signature = list(file_bytes[:8])
             return jsonify({
                 'status': 'error',
                 'message': 'Invalid image data. Please upload a valid JPEG or PNG.',
                 'error_type': 'invalid_image',
                 'file_size': len(file_bytes),
-                'signature': signature
+                'signature': list(file_bytes[:8])
             }), 400
+
         quality_info = _assess_image_quality(image)
         result = processor.process(image)
+
     finally:
         processor.pixel_to_cm_ratio = original_pixel_ratio
 
     if result is None:
-        guidance = [
-            "Ensure the animal is clearly visible in the photo.",
-            "Use a side-profile view with good lighting.",
-            "Avoid extreme angles or partially cropped animals.",
-            "Try taking a new photo with better contrast against the background."
-        ]
         return jsonify({
             'status': 'error',
             'success': False,
-            'message': 'Could not detect animal in image. No bounding box found.',
+            'message': 'Could not detect animal pose or bounding box.',
             'error_type': 'detection_failed',
-            'guidance': guidance,
+            'guidance': [
+                "Ensure the animal is standing in a clear side profile.",
+                "Make sure the full body from shoulder to heel is visible.",
+                "Avoid extreme angles or partially visible animals.",
+                "Try taking a new photo with better lighting."
+            ],
             'image_quality': quality_info
         }), 422
 
     annotated_b64 = _encode_image_to_base64(result['annotated_image'])
     method_used = result.get('method', 'unknown')
+
     guidance = [
         f"Animal identified as {result['animal_type']} (using {method_used.upper()}).",
-        f"Confidence: {round(result['confidence_score'] * 100, 1)}% - "
-        f"{'High' if result['confidence_score'] > 0.8 else 'Moderate'}",
+        f"Confidence: {round(result['confidence_score'] * 100, 1)}% - {'High' if result['confidence_score'] > 0.8 else 'Moderate'}",
         "For best accuracy, take a side-profile photo of the animal.",
         "Include a reference object (ruler/tape) in future photos."
     ]
@@ -280,11 +237,10 @@ def estimate_weight() -> Response:
         if exp_range:
             guidance.append(
                 f"Estimated weight {result['weight']} kg is outside the expected range "
-                f"for {result['animal_type']} ({exp_range[0]}-{exp_range[1]} kg)."
+                f"for {result['animal_type']} ({exp_range[0]}–{exp_range[1]} kg)."
             )
-        guidance.append(
-            "Check that the selected animal type matches the photo and review calibration measurements."
-        )
+        guidance.append("Check that the selected animal type matches the photo and review calibration.")
+
     scan_record = {
         'timestamp': datetime.now().isoformat(),
         'animal_name': animal_name,
@@ -298,21 +254,19 @@ def estimate_weight() -> Response:
         'method': method_used
     }
     scan_history.append(scan_record)
+
     return jsonify({
         'status': 'success',
         'success': True,
-        'weight': result['weight'],
-        'body_length': result['body_length'],
-        'body_height': result['body_height'],
+        'weight_kg': result['weight'],           # primary field
+        'weight': result['weight'],              # legacy alias
+        'body_length_cm': result['body_length'], # primary field
+        'body_length': result['body_length'],    # legacy alias
+        'body_height_cm': result['body_height'], # primary field
+        'body_height': result['body_height'],    # legacy alias
         'estimated_girth': result['estimated_girth'],
         'animal_type': result['animal_type'],
         'confidence_score': result['confidence_score'],
-        # Base44 frontend field names (see livestock-scale-ai-.base44.app bundle)
-        'estimated_weight_kg': result['weight'],
-        'confidence_interval': result['confidence_score'],
-        'body_length_cm': result['body_length'],
-        'body_height_cm': result['body_height'],
-        'annotated_image_base64': annotated_b64,
         'pixel_to_cm_ratio': processor.pixel_to_cm_ratio,
         'image_quality': quality_info,
         'expected_weight_range': result.get('expected_weight_range'),
@@ -328,28 +282,22 @@ def estimate_weight() -> Response:
 def get_animal_types() -> Response:
     """Get available animal types and their calibration info."""
     types = AnimalProcessor.get_available_types()
-    return jsonify({
-        'success': True,
-        'animal_types': types,
-        'count': len(types)
-    }), 200
+    return jsonify({'success': True, 'animal_types': types, 'count': len(types)}), 200
 
 
 @app.route('/api/health', methods=['GET'])
 def health_check() -> Response:
-    """Health check endpoint for Base44 frontend."""
+    """Health check endpoint."""
     return jsonify({
         'status': 'healthy',
-        'version': '1.0.0',
-        'deploy_version': '2026-05-17-base44',
+        'version': '1.1.0',
+        'deploy_version': '2026-05-17-01',
         'service': 'LivestockAI Weight Estimation API',
         'timestamp': datetime.now().isoformat(),
         'features': {
             'weight_estimation': True,
-            'yolo_detection': AnimalProcessor.is_yolo_available(),
-            'detection_modes': ['contour_fallback', 'yolo'],
             'calibration': True,
-            'reference_object_support': True,
+            'all_species_mediapipe': True,
             'session_tracking': True,
             'image_quality_assessment': True
         }
@@ -358,75 +306,42 @@ def health_check() -> Response:
 
 @app.route('/api/scan-history', methods=['GET'])
 def get_scan_history() -> Response:
-    """Get all scans from current session.
-    
-    Query parameters:
-        - animal_type: Filter by animal type
-        - limit: Maximum number of records to return (default: 100)
-    """
     animal_type_filter = request.args.get('animal_type')
     limit = int(request.args.get('limit', 100))
-    
     filtered_scans = scan_history
     if animal_type_filter:
         filtered_scans = [s for s in scan_history if animal_type_filter.lower() in s['animal_type'].lower()]
-    
-    return jsonify({
-        'success': True,
-        'total_scans': len(filtered_scans),
-        'scans': filtered_scans[-limit:]
-    }), 200
+    return jsonify({'success': True, 'total_scans': len(filtered_scans), 'scans': filtered_scans[-limit:]}), 200
 
 
 @app.route('/api/scan-history', methods=['DELETE'])
 def clear_scan_history() -> Response:
-    """Clear scan history."""
     global scan_history
     scan_history = []
-    return jsonify({
-        'success': True,
-        'message': 'Scan history cleared.'
-    }), 200
+    return jsonify({'success': True, 'message': 'Scan history cleared.'}), 200
 
 
 @app.route('/api/session/calibration', methods=['GET'])
 def get_session_calibration() -> Response:
-    """Get current calibration for a session.
-    
-    Query parameters:
-        - session_id: Session ID (default: 'default')
-    """
     session_id = request.args.get('session_id', 'default')
     calibration_value = session_calibration.get(session_id)
-    
     return jsonify({
         'success': True,
         'session_id': session_id,
-        'pixel_to_cm_ratio': calibration_value if calibration_value else None,
+        'pixel_to_cm_ratio': calibration_value,
         'is_calibrated': calibration_value is not None
     }), 200
 
 
 @app.route('/api/session/calibration', methods=['POST'])
 def set_session_calibration() -> Response:
-    """Set calibration for a session.
-    
-    JSON body:
-        {
-            "session_id": "my_session",
-            "pixel_to_cm_ratio": 0.1234
-        }
-    """
     data = request.get_json()
     if not data:
         return jsonify({'error': 'No JSON data provided.', 'error_type': 'no_json'}), 400
-    
     session_id = data.get('session_id', 'default')
     pixel_ratio = data.get('pixel_to_cm_ratio')
-    
     if pixel_ratio is None:
         return jsonify({'error': 'pixel_to_cm_ratio is required.', 'error_type': 'missing_ratio'}), 400
-    
     try:
         session_calibration[session_id] = float(pixel_ratio)
         return jsonify({
@@ -441,18 +356,6 @@ def set_session_calibration() -> Response:
 
 @app.route('/api/calibrate', methods=['POST'])
 def calibrate() -> Response:
-    """Calibrate the pixel-to-cm ratio or adjust weight formula.
-    
-    JSON body:
-        {
-            "action": "pixel_ratio" | "weight_formula",
-            "animal_type": "dairy_cow" (for weight_formula action),
-            "known_cm": 10.5 (for pixel_ratio action),
-            "measured_pixels": 40 (for pixel_ratio action),
-            "divisor": 11.88 (for weight_formula action, optional),
-            "girth_multiplier": 2.8 (for weight_formula action, optional)
-        }
-    """
     data = request.get_json()
     if not data:
         return jsonify({'error': 'No JSON data provided.', 'error_type': 'no_json'}), 400
@@ -464,7 +367,6 @@ def calibrate() -> Response:
         measured_pixels = data.get('measured_pixels')
         if known_cm is None or measured_pixels is None:
             return jsonify({'error': 'Missing known_cm or measured_pixels.', 'error_type': 'missing_fields'}), 400
-        
         try:
             processor = AnimalProcessor()
             processor.calibrate_pixel_ratio(float(known_cm), float(measured_pixels))
@@ -480,10 +382,8 @@ def calibrate() -> Response:
         animal_type = data.get('animal_type', 'dairy_cow')
         divisor = data.get('divisor')
         girth_multiplier = data.get('girth_multiplier')
-        
         if divisor is None and girth_multiplier is None:
             return jsonify({'error': 'Provide at least divisor or girth_multiplier.', 'error_type': 'missing_calibration'}), 400
-        
         try:
             processor = AnimalProcessor()
             processor.adjust_weight_calibration(animal_type, divisor, girth_multiplier)
@@ -501,7 +401,6 @@ def calibrate() -> Response:
 
 @app.route('/api/guidelines', methods=['GET'])
 def get_guidelines() -> Response:
-    """Get best practice guidelines for accurate weight estimation."""
     return jsonify({
         'success': True,
         'guidelines': {
@@ -531,7 +430,6 @@ def get_guidelines() -> Response:
                 {'name': 'A4 Paper', 'width_cm': 21, 'height_cm': 29.7},
                 {'name': 'US Dollar Bill', 'width_cm': 16.66, 'height_cm': 6.63},
                 {'name': 'Standard Ruler', 'width_cm': 30, 'height_cm': None},
-                {'name': 'Measuring Tape', 'width_cm': 'Variable', 'height_cm': None}
             ]
         }
     }), 200
@@ -539,41 +437,23 @@ def get_guidelines() -> Response:
 
 @app.errorhandler(404)
 def handle_not_found(error):
-    return jsonify({
-        'success': False,
-        'error': 'not_found',
-        'message': 'The requested URL was not found on the server.',
-        'path': request.path
-    }), 404
+    return jsonify({'success': False, 'error': 'not_found', 'message': 'The requested URL was not found.', 'path': request.path}), 404
 
 
 @app.errorhandler(405)
 def handle_method_not_allowed(error):
-    return jsonify({
-        'success': False,
-        'error': 'method_not_allowed',
-        'message': 'The requested method is not allowed for this URL.'
-    }), 405
+    return jsonify({'success': False, 'error': 'method_not_allowed', 'message': 'The requested method is not allowed for this URL.'}), 405
 
 
 @app.errorhandler(500)
 def handle_internal_error(error):
-    return jsonify({
-        'success': False,
-        'error': 'internal_server_error',
-        'message': 'An unexpected error occurred on the server.'
-    }), 500
+    return jsonify({'success': False, 'error': 'internal_server_error', 'message': 'An unexpected error occurred.'}), 500
 
 
 @app.errorhandler(Exception)
 def handle_unhandled_exception(error):
-    return jsonify({
-        'success': False,
-        'error': 'unhandled_exception',
-        'message': str(error)
-    }), 500
+    return jsonify({'success': False, 'error': 'unhandled_exception', 'message': str(error)}), 500
 
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000)
- 
