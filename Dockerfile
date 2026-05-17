@@ -15,6 +15,11 @@ RUN pip install --no-cache-dir torch torchvision --index-url https://download.py
 RUN pip install --no-cache-dir -r requirements.txt
 RUN pip install --no-cache-dir ultralytics
 
+# Ultralytics forcefully installs the GUI version of OpenCV (opencv-python).
+# We must uninstall it and reinstall the headless version to prevent libxcb/libgl runtime errors.
+RUN pip uninstall -y opencv-python opencv-python-headless && \
+    pip install --no-cache-dir opencv-python-headless==4.8.1.78
+
 # Copy the rest of the application
 COPY . .
 
