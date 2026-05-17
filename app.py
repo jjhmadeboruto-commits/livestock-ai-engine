@@ -302,12 +302,13 @@ def health_check() -> Response:
     return jsonify({
         'status': 'healthy',
         'version': '1.0.0',
-        'deploy_version': '2026-05-17-yolo',
+        'deploy_version': '2026-05-17-contour',
         'service': 'LivestockAI Weight Estimation API',
         'timestamp': datetime.now().isoformat(),
         'features': {
             'weight_estimation': True,
             'yolo_detection': AnimalProcessor.is_yolo_available(),
+            'detection_modes': ['contour_fallback', 'yolo'],
             'calibration': True,
             'reference_object_support': True,
             'session_tracking': True,

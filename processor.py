@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+
 import cv2
 import numpy as np
 from typing import Dict, Optional, Tuple
@@ -8,6 +10,11 @@ try:
     from ultralytics import YOLO
 except ImportError:
     YOLO = None  # type: ignore[misc, assignment]
+
+# YOLO + PyTorch often OOM on Render free tier; contour fallback still estimates weight.
+_YOLO_OPT_OUT = os.environ.get("DISABLE_YOLO", "").lower() in ("1", "true", "yes")
+if os.environ.get("RENDER") and os.environ.get("ENABLE_YOLO", "").lower() not in ("1", "true", "yes"):
+    _YOLO_OPT_OUT = True
 
 
 class AnimalProcessor:
@@ -26,6 +33,7 @@ class AnimalProcessor:
     }
 
     _yolo_model = None
+    _yolo_load_failed = False
     YOLO_CONF_THRESHOLD = 0.25
     YOLO_LENGTH_SCALE = 0.75
     YOLO_HEIGHT_SCALE = 0.80
@@ -41,14 +49,29 @@ class AnimalProcessor:
 
     @classmethod
     def is_yolo_available(cls) -> bool:
-        return YOLO is not None
+        if YOLO is None or _YOLO_OPT_OUT or cls._yolo_load_failed:
+            return False
+        if cls._yolo_model is not None:
+            return True
+        try:
+            cls._get_yolo_model()
+            return cls._yolo_model is not None
+        except Exception:
+            return False
 
     @classmethod
     def _get_yolo_model(cls):
+        if cls._yolo_load_failed or _YOLO_OPT_OUT:
+            return None
         if cls._yolo_model is None:
             if YOLO is None:
-                raise ImportError("ultralytics is not installed")
-            cls._yolo_model = YOLO("yolov8n.pt")
+                return None
+            try:
+                cls._yolo_model = YOLO("yolov8n.pt")
+            except Exception:
+                cls._yolo_load_failed = True
+                cls._yolo_model = None
+                return None
         return cls._yolo_model
 
     def process(self, image_bgr: np.ndarray) -> Optional[Dict[str, object]]:
@@ -125,32 +148,36 @@ class AnimalProcessor:
         """Return (x1, y1, x2, y2, confidence) for the largest confident detection."""
         try:
             model = self._get_yolo_model()
-        except ImportError:
+            if model is None:
+                return None
+
+            results = model(image_bgr, verbose=False)
+            if not results or results[0].boxes is None or len(results[0].boxes) == 0:
+                return None
+
+            best_box = None
+            best_area = 0
+            best_conf = 0.0
+
+            for box in results[0].boxes:
+                conf = float(box.conf[0].cpu().numpy())
+                if conf < self.YOLO_CONF_THRESHOLD:
+                    continue
+                x1, y1, x2, y2 = map(int, box.xyxy[0].cpu().numpy())
+                area = (x2 - x1) * (y2 - y1)
+                if area > best_area:
+                    best_area = area
+                    best_box = (x1, y1, x2, y2)
+                    best_conf = conf
+
+            if best_box is None:
+                return None
+            x1, y1, x2, y2 = best_box
+            return x1, y1, x2, y2, best_conf
+        except Exception:
+            self.__class__._yolo_load_failed = True
+            self.__class__._yolo_model = None
             return None
-
-        results = model(image_bgr, verbose=False)
-        if not results or results[0].boxes is None or len(results[0].boxes) == 0:
-            return None
-
-        best_box = None
-        best_area = 0
-        best_conf = 0.0
-
-        for box in results[0].boxes:
-            conf = float(box.conf[0].cpu().numpy())
-            if conf < self.YOLO_CONF_THRESHOLD:
-                continue
-            x1, y1, x2, y2 = map(int, box.xyxy[0].cpu().numpy())
-            area = (x2 - x1) * (y2 - y1)
-            if area > best_area:
-                best_area = area
-                best_box = (x1, y1, x2, y2)
-                best_conf = conf
-
-        if best_box is None:
-            return None
-        x1, y1, x2, y2 = best_box
-        return x1, y1, x2, y2, best_conf
 
     def calibrate_pixel_ratio(self, known_cm: float, measured_pixels: float) -> None:
         if measured_pixels > 0:
