@@ -38,14 +38,12 @@ class AnimalProcessor:
         if self.__class__._yolo_model is None:
             try:
                 from ultralytics import YOLO
-                BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-                default_model_path = os.path.join(BASE_DIR, "..", "models", "yolov8n.pt")
-                model_path = os.environ.get("MODEL_PATH", os.path.abspath(default_model_path))
-                self.__class__._yolo_model = YOLO(model_path)
-                logging.info(f"YOLO successfully mounted from {model_path}")
+                # Use standard string to force download if missing
+                self.__class__._yolo_model = YOLO("yolov8n.pt")
+                logging.info("YOLOv8 Neural Network initialized successfully.")
             except Exception as e:
                 self.__class__._yolo_model = False
-                logging.error(f"[AnimalProcessor] YOLOv8 initialisation failed: {e}")
+                logging.error(f"Failed to load YOLO weights globally: {e}")
 
         self.model = self.__class__._yolo_model if self.__class__._yolo_model else None
 
