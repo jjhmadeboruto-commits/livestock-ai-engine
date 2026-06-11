@@ -37,12 +37,21 @@ class AnimalProcessor:
 
         if self.__class__._yolo_model is None:
             try:
+                import os
                 from ultralytics import YOLO
-                self.model = YOLO("yolov8n.pt")
+                
+                # Build an absolute path targeting the models folder
+                base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+                local_weights_path = os.path.join(base_dir, "models", "yolov8n.pt")
+                
+                logging.info(f"Targeting local model path: {local_weights_path}")
+                
+                # Load the static weights directly without initiating external web downloads
+                self.model = YOLO(local_weights_path)
                 self.__class__._yolo_model = self.model
-                logging.info("YOLOv8 Neural Network initialized successfully.")
+                logging.info("YOLOv8 Neural Network initialized successfully from local asset cache!")
             except Exception as e:
-                logging.error(f"Failed to load YOLO weights globally: {e}")
+                logging.error(f"Failed to load YOLO weights locally: {e}")
                 self.__class__._yolo_model = False
 
         self.model = self.__class__._yolo_model if self.__class__._yolo_model else None
