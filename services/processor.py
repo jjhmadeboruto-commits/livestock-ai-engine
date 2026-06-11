@@ -37,31 +37,9 @@ class AnimalProcessor:
 
         if self.__class__._yolo_model is None:
             try:
-                import torch
                 from ultralytics import YOLO
-                
-                # Apply PyTorch monkeypatch to bypass strict weights_only security block
-                original_defaults = torch.load.__defaults__ or ()
-                # If weights_only is an expected arg, we override defaults to include False.
-                # Since kwargs are mostly used now, torch.serialization.add_safe_globals is better.
-                try:
-                    torch.serialization.add_safe_globals([set, torch.Size])
-                except AttributeError:
-                    pass
-                
-                # Monkeypatch torch.load to set weights_only=False
-                _original_load = torch.load
-                def _safe_load(*args, **kwargs):
-                    kwargs['weights_only'] = False
-                    return _original_load(*args, **kwargs)
-                torch.load = _safe_load
-                
                 # Use standard string to force download if missing
                 self.__class__._yolo_model = YOLO("yolov8n.pt")
-                
-                # Restore original torch.load
-                torch.load = _original_load
-                
                 logging.info("YOLOv8 Neural Network initialized successfully.")
             except Exception as e:
                 self.__class__._yolo_model = False

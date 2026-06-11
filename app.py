@@ -2,6 +2,21 @@ import base64
 from io import BytesIO
 from datetime import datetime
 import importlib.util
+import torch
+from importlib import import_module
+
+# Explicitly register the Ultralytics architecture globals into PyTorch's safe allowlist
+try:
+    # This prevents the WeightsUnpickler restriction from blocking your model compilation
+    torch.serialization.add_safe_globals([
+        set, 
+        torch.Size, 
+        import_module('ultralytics.nn.tasks').DetectionModel if importlib.util.find_spec('ultralytics') else None
+    ])
+except Exception:
+    # High-reliability environmental fallback for cloud containers running PyTorch 2.6+
+    import os
+    os.environ["TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD"] = "1"
 
 import cv2
 import numpy as np
