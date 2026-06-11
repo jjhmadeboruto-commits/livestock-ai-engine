@@ -37,24 +37,10 @@ class AnimalProcessor:
 
         if self.__class__._yolo_model is None:
             try:
-                import torch
-                # 1. Force the environmental override flag just in case
-                import os
-                os.environ["TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD"] = "1"
-                
-                # 2. Intercept torch.load defaults dynamically before loading the weights
-                import functools
-                if hasattr(torch, 'load'):
-                    # Force weights_only to always evaluate to False for local models
-                    torch.load = functools.partial(torch.load, weights_only=False)
-                    logging.info("PyTorch weights_only security restriction successfully bypassed.")
-
-                # 3. Initialize YOLO with the secure environment established
                 from ultralytics import YOLO
                 self.model = YOLO("yolov8n.pt")
                 self.__class__._yolo_model = self.model
-                logging.info("YOLOv8 Neural Network initialized successfully without pickle errors.")
-
+                logging.info("YOLOv8 Neural Network initialized successfully.")
             except Exception as e:
                 logging.error(f"Failed to load YOLO weights globally: {e}")
                 self.__class__._yolo_model = False
