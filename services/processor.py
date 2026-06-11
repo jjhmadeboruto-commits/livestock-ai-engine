@@ -141,10 +141,12 @@ class AnimalProcessor:
         within_range = expected_min <= weight_kg <= expected_max
 
         # Secure clamping bounds against wild edge-case images
-        if weight_kg > expected_max:
-            weight_kg = expected_max
-        elif weight_kg < expected_min:
-            weight_kg = expected_min
+        # Check aspect ratio warning if fallback is used
+        warning_message = None
+        if method_used == "contour_fallback":
+            aspect_ratio = box_width_pixels / max(1.0, box_height_pixels)
+            if aspect_ratio < 1.1 or aspect_ratio > 2.2:
+                warning_message = "Unusual geometry detected. Please ensure the animal is standing broadside."
 
         return {
             "weight": float(round(weight_kg, 2)),
@@ -157,6 +159,7 @@ class AnimalProcessor:
             "expected_weight_range": calibration.get("expected_range"),
             "within_expected_range": bool(within_range),
             "method": str(method_used),
+            "warning": warning_message,
         }
 
     def calibrate_pixel_ratio(self, known_cm: float, measured_pixels: float) -> None:
@@ -183,7 +186,7 @@ class AnimalProcessor:
         return cls.LIVESTOCK_CALIBRATION.copy()
 
     def _yolo_detect(self, image_bgr: np.ndarray, target_classes: set, results: Any = None) -> Optional[Tuple[int, int, int, int, float]]:
-        """Runs context-aware YOLO filter passes and auto-corrects mismatched animal selections."""
+        """Runs context-aware YOLO filter passes, prioritizing the largest animal by area, and auto-corrects mismatched animal selections."""
         if results is None:
             try:
                 results = self.model(image_bgr, verbose=False, conf=0.20)[0]
@@ -191,63 +194,75 @@ class AnimalProcessor:
                 logging.error(f"YOLO engine failure: {e}")
                 return None
 
-        # COCO Class mapping reverse lookup
         class_mapping = {16: "poultry", 20: "sheep", 21: "dairy_cow", 22: "pig", 19: "donkey"}
 
-        # Look through everything YOLO detected in the image first for high confidence mismatch overrides
-        for box in results.boxes:
-            detected_cls = int(box.cls[0])
-            conf = float(box.conf[0])
-
-            # If the detected class is one of our mapped livestock, but NOT in the target_classes,
-            # and we have high confidence in the detection, we override the animal type.
-            if detected_cls in class_mapping and detected_cls not in target_classes:
-                if conf > 0.60:  # High confidence true animal detection
-                    detected_type = class_mapping[detected_cls]
-                    logging.info(f"Auto-correcting animal type override from request context to: {detected_type}")
-
-                    # Switch the app state to the true identified animal
-                    self.set_animal_type(detected_type)
-
-                    # Update variables to use the newly detected animal's specifications
-                    x1, y1, x2, y2 = map(int, box.xyxy[0])
-                    return (x1, y1, x2, y2, conf)
-
-        best_box = None
-        best_conf = 0.0
+        # 1. Identify the single largest animal/object detected to determine the main subject
+        main_box = None
+        main_area = 0
+        main_conf = 0.0
+        main_cls = -1
 
         for box in results.boxes:
             cls_id = int(box.cls[0])
             conf = float(box.conf[0])
             x1, y1, x2, y2 = map(int, box.xyxy[0])
+            area = (x2 - x1) * (y2 - y1)
 
-            # Cross-reference with our specific animal class dictionary configurations
+            if area > main_area:
+                main_area = area
+                main_conf = conf
+                main_box = (x1, y1, x2, y2, conf)
+                main_cls = cls_id
+
+        # 2. Find other boxes matching the target class group
+        best_box = None
+        best_area = 0
+        for box in results.boxes:
+            cls_id = int(box.cls[0])
+            conf = float(box.conf[0])
+            x1, y1, x2, y2 = map(int, box.xyxy[0])
+            area = (x2 - x1) * (y2 - y1)
+
             if cls_id in target_classes:
-                if conf > best_conf:
-                    best_conf = conf
+                if area > best_area:
+                    best_area = area
                     best_box = (x1, y1, x2, y2, conf)
 
-        if best_box is None:
-            # Secondary broader livestock check if explicit group match misses
-            for box in results.boxes:
-                cls_id = int(box.cls[0])
-                if cls_id in self.YOLO_LIVESTOCK_CLASSES:
-                    conf = float(box.conf[0])
-                    if conf > best_conf:
-                        x1, y1, x2, y2 = map(int, box.xyxy[0])
-                        best_conf = conf
-                        best_box = (x1, y1, x2, y2, conf)
+        # 3. Find other broad livestock boxes
+        best_broad_box = None
+        best_broad_area = 0
+        for box in results.boxes:
+            cls_id = int(box.cls[0])
+            if cls_id in self.YOLO_LIVESTOCK_CLASSES:
+                conf = float(box.conf[0])
+                x1, y1, x2, y2 = map(int, box.xyxy[0])
+                area = (x2 - x1) * (y2 - y1)
+                if area > best_broad_area:
+                    best_broad_area = area
+                    best_broad_box = (x1, y1, x2, y2, conf)
 
-        if best_box is None:
-            return None
+        # 4. Resolve the best candidate box
+        final_box = None
+        if main_box is not None and (main_cls in target_classes or (main_cls in class_mapping and main_cls not in target_classes and main_conf > 0.60)):
+            if main_cls in class_mapping and main_cls not in target_classes and main_conf > 0.60:
+                detected_type = class_mapping[main_cls]
+                logging.info(f"Auto-correcting animal type override to: {detected_type} (Largest subject)")
+                self.set_animal_type(detected_type)
+            final_box = main_box
+        elif best_box is not None:
+            final_box = best_box
+        elif best_broad_box is not None:
+            final_box = best_broad_box
 
-        # Throw away tiny noise boxes
-        x1, y1, x2, y2, conf = best_box
-        h, w = image_bgr.shape[:2]
-        if (x2 - x1) * (y2 - y1) < (w * h * 0.03):
-            return None
+        # 5. Check if the final selected box passes the minimum size threshold (noise reduction)
+        if final_box is not None:
+            x1, y1, x2, y2, conf = final_box
+            h, w = image_bgr.shape[:2]
+            if (x2 - x1) * (y2 - y1) < (w * h * 0.03):
+                return None
+            return final_box
 
-        return best_box
+        return None
 
     def _fallback_contour_detection(self, image_bgr: np.ndarray) -> Optional[Tuple[int, int, int, int]]:
         height, width = image_bgr.shape[:2]
