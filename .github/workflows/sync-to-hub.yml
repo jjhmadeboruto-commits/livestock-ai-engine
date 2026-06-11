@@ -9,9 +9,16 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - name: Push to Hugging Face
+          lfs: true
+
+      - name: Configure Git identity
+        run: |
+          git config --global user.email "ci@github-actions.com"
+          git config --global user.name "GitHub Actions"
+
+      - name: Push to Hugging Face Space
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
-          git remote add hf https://jjhboruto:$HF_TOKEN@huggingface.co/spaces/jjhboruto/livestock-ai-engine
-          git push --force hf main
+          git remote add hf https://jjhboruto:$HF_TOKEN@huggingface.co/spaces/jjhboruto/livestock-ai-engine || true
+          git push hf main --force
