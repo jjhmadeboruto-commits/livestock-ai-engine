@@ -1,6 +1,7 @@
-flask
-flask-cors
+flask==3.0.2
+flask-cors==4.0.0
 opencv-python-headless==4.8.1.78
-numpy<2.0.0
-gunicorn
-python-dotenv
+numpy==1.26.4
+ultralytics==8.1.0
+gunicorn==21.2.0
+python-dotenv==1.0.1
