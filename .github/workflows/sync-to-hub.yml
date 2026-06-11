@@ -10,15 +10,8 @@ jobs:
         with:
           fetch-depth: 0
           lfs: true
-
-      - name: Configure Git identity
-        run: |
-          git config --global user.email "ci@github-actions.com"
-          git config --global user.name "GitHub Actions"
-
-      - name: Push to Hugging Face Space
-        env:
-          HF_TOKEN: ${{ secrets.HF_TOKEN }}
-        run: |
-          git remote add hf https://jjhboruto:$HF_TOKEN@huggingface.co/spaces/jjhboruto/livestock-ai-engine || true
-          git push hf main --force
+      - uses: huggingface/hub-sync@v0.1.0
+        with:
+          github_repo_id: ${{ github.repository }}
+          huggingface_repo_id: jjhboruto/livestock-ai-engine
+          hf_token: ${{ secrets.HF_TOKEN }}
