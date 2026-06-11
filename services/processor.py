@@ -59,9 +59,32 @@ class AnimalProcessor:
         calibration = self.LIVESTOCK_CALIBRATION[self.animal_type]
         target_coco_classes = calibration["coco_classes"]
 
-        # Step 1: Run YOLO detection with species class context matching
+        # Run human detection check and obtain YOLO results to avoid duplicate inference
+        yolo_results = None
         if self.model:
-            box = self._yolo_detect(image_bgr, target_coco_classes)
+            try:
+                yolo_results = self.model(image_bgr, verbose=False, conf=0.20)[0]
+                for box in yolo_results.boxes:
+                    if int(box.cls[0]) == 0:  # Class 0 is human in the COCO dataset
+                        return {
+                            "weight": 0.0,
+                            "body_length": 0.0,
+                            "body_height": 0.0,
+                            "estimated_girth": 0.0,
+                            "animal_type": "Invalid Target",
+                            "confidence_score": 0.0,
+                            "annotated_image": image_bgr,
+                            "expected_weight_range": [0, 0],
+                            "within_expected_range": False,
+                            "method": "rejected",
+                            "error_message": "Human detected. Please ensure only livestock animals are in frame."
+                        }
+            except Exception as e:
+                logging.error(f"YOLO engine failure: {e}")
+
+        # Step 1: Run YOLO detection with species class context matching
+        if self.model and yolo_results is not None:
+            box = self._yolo_detect(image_bgr, target_coco_classes, yolo_results)
             if box is not None:
                 # Refresh calibration reference in case auto-correction happened inside _yolo_detect
                 calibration = self.LIVESTOCK_CALIBRATION[self.animal_type]
@@ -159,13 +182,14 @@ class AnimalProcessor:
     def get_available_types(cls) -> dict:
         return cls.LIVESTOCK_CALIBRATION.copy()
 
-    def _yolo_detect(self, image_bgr: np.ndarray, target_classes: set) -> Optional[Tuple[int, int, int, int, float]]:
+    def _yolo_detect(self, image_bgr: np.ndarray, target_classes: set, results: Any = None) -> Optional[Tuple[int, int, int, int, float]]:
         """Runs context-aware YOLO filter passes and auto-corrects mismatched animal selections."""
-        try:
-            results = self.model(image_bgr, verbose=False, conf=0.20)[0]
-        except Exception as e:
-            logging.error(f"YOLO engine failure: {e}")
-            return None
+        if results is None:
+            try:
+                results = self.model(image_bgr, verbose=False, conf=0.20)[0]
+            except Exception as e:
+                logging.error(f"YOLO engine failure: {e}")
+                return None
 
         # COCO Class mapping reverse lookup
         class_mapping = {16: "poultry", 20: "sheep", 21: "dairy_cow", 22: "pig", 19: "donkey"}
