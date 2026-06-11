@@ -40,18 +40,40 @@ class AnimalProcessor:
                 import os
                 from ultralytics import YOLO
                 
-                # Build an absolute path targeting the models folder
-                base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-                local_weights_path = os.path.join(base_dir, "models", "yolov8n.pt")
+                # 1. Start with standard absolute file level direction
+                current_file_path = os.path.abspath(__file__)
+                services_dir = os.path.dirname(current_file_path)
+                root_dir = os.path.dirname(services_dir)
                 
-                logging.info(f"Targeting local model path: {local_weights_path}")
+                # Define the primary and fallback target paths
+                path_options = [
+                    os.path.join(root_dir, "models", "yolov8n.pt"), # Standard local root path
+                    os.path.join(os.getcwd(), "models", "yolov8n.pt"), # Current Working Directory path
+                    os.path.join(os.getcwd(), "yolov8n.pt"), # Root level fallback
+                    "yolov8n.pt" # Raw system path fallback
+                ]
                 
-                # Load the static weights directly without initiating external web downloads
-                self.model = YOLO(local_weights_path)
+                selected_path = None
+                for path in path_options:
+                    logging.info(f"Checking for weights at target location: {path}")
+                    if os.path.exists(path):
+                        selected_path = path
+                        logging.info(f"SUCCESS: Found weights file cache layer at: {path}")
+                        break
+
+                if selected_path:
+                    # Load the verified local file path
+                    self.model = YOLO(selected_path)
+                    logging.info(f"YOLOv8 Neural Network initialized completely using: {selected_path}")
+                else:
+                    # Emergency recovery: Let YOLO try to resolve it natively if files are missing
+                    logging.warning("CRITICAL: Local weights file not detected in options list. Running default string configuration.")
+                    self.model = YOLO("yolov8n.pt")
+                
                 self.__class__._yolo_model = self.model
-                logging.info("YOLOv8 Neural Network initialized successfully from local asset cache!")
+
             except Exception as e:
-                logging.error(f"Failed to load YOLO weights locally: {e}")
+                logging.error(f"Failed to compile YOLO model weights: {e}")
                 self.__class__._yolo_model = False
 
         self.model = self.__class__._yolo_model if self.__class__._yolo_model else None
