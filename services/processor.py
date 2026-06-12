@@ -281,16 +281,31 @@ class AnimalProcessor:
 
         # 4. Resolve the best candidate box
         final_box = None
-        if main_box is not None and (main_cls in target_classes or (main_cls in class_mapping and main_cls not in target_classes and main_conf > 0.60)):
-            if main_cls in class_mapping and main_cls not in target_classes and main_conf > 0.60:
-                detected_type = class_mapping[main_cls]
-                logging.info(f"Auto-correcting animal type override to: {detected_type} (Largest subject)")
-                self.set_animal_type(detected_type)
+        final_cls = -1
+        
+        if main_box is not None and (main_cls in target_classes or (main_cls in class_mapping and main_cls not in target_classes and main_conf > 0.40)):
             final_box = main_box
+            final_cls = main_cls
         elif best_box is not None:
             final_box = best_box
+            # we need to know what class best_box was, but we only saved x1, y1, x2, y2, conf
+            # Let's extract it from the loop above or just re-match
+            for box in results.boxes:
+                if float(box.conf[0]) == final_box[4]:
+                    final_cls = int(box.cls[0])
+                    break
         elif best_broad_box is not None:
             final_box = best_broad_box
+            for box in results.boxes:
+                if float(box.conf[0]) == final_box[4]:
+                    final_cls = int(box.cls[0])
+                    break
+
+        # Apply auto-correction if the final selected box is of a different species
+        if final_box is not None and final_cls in class_mapping and final_cls not in target_classes:
+            detected_type = class_mapping[final_cls]
+            logging.info(f"Auto-correcting animal type override to: {detected_type}")
+            self.set_animal_type(detected_type)
 
         # 5. Check if the final selected box passes the minimum size threshold (noise reduction)
         if final_box is not None:
