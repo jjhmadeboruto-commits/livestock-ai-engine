@@ -437,96 +437,79 @@ class AnimalProcessor:
                 logging.error(f"YOLO engine failure: {e}")
                 return None
 
-        # Check for any dominant non-livestock target (e.g. dog, cat, person) in the entire image
+        # 1. Separate boxes into candidates (animals) and others
+        animal_boxes = []
+        has_human = False
         largest_non_livestock_class = -1
         largest_non_livestock_area = 0
+
         for box in results.boxes:
             cls_id = int(box.cls[0])
             conf = float(box.conf[0])
-            if cls_id not in self.YOLO_LIVESTOCK_CLASSES and conf > 0.35:
-                x1_nl, y1_nl, x2_nl, y2_nl = map(int, box.xyxy[0])
-                area = (x2_nl - x1_nl) * (y2_nl - y1_nl)
-                if area > largest_non_livestock_area:
+            x1, y1, x2, y2 = map(int, box.xyxy[0])
+            area = (x2 - x1) * (y2 - y1)
+
+            if cls_id == 0:
+                if conf > 0.35:
+                    has_human = True
+                continue
+
+            # Animal classes in COCO: 14=bird, 15=cat, 16=dog, 17=horse, 18=sheep, 19=cow, 20=elephant, 21=bear, 22=zebra, 23=giraffe
+            if cls_id in {14, 15, 16, 17, 18, 19, 20, 21, 22, 23}:
+                if conf > 0.15:
+                    animal_boxes.append((x1, y1, x2, y2, conf, cls_id))
+            else:
+                # Keep track of other non-animal classes for rejection message
+                if conf > 0.35 and area > largest_non_livestock_area:
                     largest_non_livestock_area = area
                     largest_non_livestock_class = cls_id
 
-        # ── Step 1: Find the largest detected livestock animal ────────────────
-        final_box = None
-        final_cls = -1
-        best_area = 0
+        # Sort animal boxes by area descending
+        animal_boxes.sort(key=lambda b: (b[2]-b[0])*(b[3]-b[1]), reverse=True)
 
-        # Priority 1: largest box that matches user's selected COCO target classes
-        for box in results.boxes:
-            cls_id = int(box.cls[0])
-            if cls_id not in self.YOLO_LIVESTOCK_CLASSES:
+        # Try the top 3 animal boxes
+        for x1, y1, x2, y2, conf, cls_id in animal_boxes[:3]:
+            # Size threshold check (exclude tiny noise)
+            h, w = image_bgr.shape[:2]
+            if (x2 - x1) * (y2 - y1) < (w * h * 0.03):
+                logging.info("Detected box too small — likely a false positive, discarding.")
                 continue
-            x1, y1, x2, y2 = map(int, box.xyxy[0])
-            conf = float(box.conf[0])
-            area = (x2 - x1) * (y2 - y1)
-            if cls_id in target_classes and area > best_area:
-                best_area = area
-                final_box = (x1, y1, x2, y2, conf)
-                final_cls = cls_id
 
-        # Priority 2: any livestock class (fallback if target class not found)
-        if final_box is None:
-            for box in results.boxes:
-                cls_id = int(box.cls[0])
-                if cls_id not in self.YOLO_LIVESTOCK_CLASSES:
-                    continue
-                x1, y1, x2, y2 = map(int, box.xyxy[0])
-                conf = float(box.conf[0])
-                area = (x2 - x1) * (y2 - y1)
-                if area > best_area:
-                    best_area = area
-                    final_box = (x1, y1, x2, y2, conf)
-                    final_cls = cls_id
+            crop = image_bgr[y1:y2, x1:x2]
+            classified_type = self._get_crop_animal_type(crop)
 
-        # If no livestock animal is detected, but a non-livestock object is present, reject it.
-        if final_box is None:
-            if largest_non_livestock_area > 0:
-                cls_name = self.model.names[largest_non_livestock_class] if hasattr(self.model, 'names') else "unknown object"
-                self.rejected_reason = f"Invalid target ({cls_name}) detected. Please ensure only livestock animals (cattle, pig, donkey, sheep, goat, poultry) are in frame."
+            if classified_type is not None and classified_type != "invalid":
+                # Valid livestock animal found!
+                is_user_cattle = self.animal_type in {"dairy_cow", "beef_cattle", "young_cattle"}
+                is_classified_cattle = classified_type in {"dairy_cow", "beef_cattle", "young_cattle"}
+
+                if is_user_cattle and is_classified_cattle:
+                    logging.info(f"Classifier confirmed Cattle. Keeping user specific: {self.animal_type}")
+                else:
+                    if self.animal_type != classified_type:
+                        logging.info(f"Auto-correcting '{self.animal_type}' to '{classified_type}' based on crop classification.")
+                        self.set_animal_type(classified_type, update_pixel_ratio=True)
+                return (x1, y1, x2, y2, conf)
+
+        # If we got here, no box was confirmed as livestock by CLIP.
+        # Set the appropriate rejection reason.
+        if has_human:
+            self.rejected_reason = "Human detected. Please ensure only livestock animals are in frame."
             return None
 
-        x1, y1, x2, y2, conf = final_box
-
-        # ── Step 2: Minimum size threshold (noise/false-positive filter) ──────
-        h, w = image_bgr.shape[:2]
-        if (x2 - x1) * (y2 - y1) < (w * h * 0.03):
-            logging.info("Detected box too small — likely a false positive, discarding.")
+        if animal_boxes:
+            largest_box = animal_boxes[0]
+            largest_cls = largest_box[5]
+            cls_name = self.model.names[largest_cls] if hasattr(self.model, 'names') else "unknown animal"
+            self.rejected_reason = f"Invalid target ({cls_name}) detected. Please ensure only livestock animals (cattle, pig, donkey, sheep, goat, poultry) are in frame."
             return None
 
-        # ── Step 3: Crop classifier verification ──────────────────────────────
-        crop = image_bgr[y1:y2, x1:x2]
-        classified_type = self._get_crop_animal_type(crop)
-
-        if classified_type == "invalid":
-            self.rejected_reason = "Unrecognized animal or object detected. Please scan only supported livestock species."
+        if largest_non_livestock_area > 0:
+            cls_name = self.model.names[largest_non_livestock_class] if hasattr(self.model, 'names') else "unknown object"
+            self.rejected_reason = f"Invalid target ({cls_name}) detected. Please ensure only livestock animals (cattle, pig, donkey, sheep, goat, poultry) are in frame."
             return None
-        elif classified_type is not None:
-            # Check if user selected one cattle type and classifier confirmed cattle
-            is_user_cattle = self.animal_type in {"dairy_cow", "beef_cattle", "young_cattle"}
-            is_classified_cattle = classified_type in {"dairy_cow", "beef_cattle", "young_cattle"}
 
-            if is_user_cattle and is_classified_cattle:
-                logging.info(f"Classifier confirmed Cattle. Keeping user specific selection: {self.animal_type}")
-            else:
-                if self.animal_type != classified_type:
-                    logging.info(f"Auto-correcting '{self.animal_type}' to '{classified_type}' based on crop classification.")
-                    self.set_animal_type(classified_type, update_pixel_ratio=True)
-        else:
-            # Fallback to group-based heuristics
-            detected_group = self.COCO_GROUPS.get(final_cls)
-            user_group     = self.ANIMAL_GROUP.get(self.animal_type)
-
-            if detected_group and user_group:
-                if detected_group != user_group:
-                    corrected_type = self.COCO_CLASS_DEFAULT.get(final_cls, "dairy_cow")
-                    logging.info(f"Cross-group fallback mismatch: user='{self.animal_type}', YOLO class {final_cls} → corrected to '{corrected_type}'")
-                    self.set_animal_type(corrected_type, update_pixel_ratio=True)
-
-        return (x1, y1, x2, y2, conf)
+        return None
 
     def _fallback_contour_detection(self, image_bgr: np.ndarray) -> Optional[Tuple[int, int, int, int]]:
         height, width = image_bgr.shape[:2]
