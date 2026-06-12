@@ -280,6 +280,12 @@ class AnimalProcessor:
 
         # Scale pixel arrays to centimeters
         ratio = max(0.0001, self.pixel_to_cm_ratio)
+        if not getattr(self, '_pixel_ratio_user_set', False):
+            h_img, w_img = image_bgr.shape[:2]
+            img_max_dim = float(max(h_img, w_img))
+            if img_max_dim > 0:
+                ratio = ratio * (640.0 / img_max_dim)
+
         length_cm = box_width_pixels * ratio
         height_cm = box_height_pixels * ratio
 
@@ -317,6 +323,7 @@ class AnimalProcessor:
             "within_expected_range": bool(within_range),
             "method": str(method_used),
             "warning": warning_message,
+            "pixel_to_cm_ratio": float(ratio),
         }
 
     def calibrate_pixel_ratio(self, known_cm: float, measured_pixels: float) -> None:

@@ -271,6 +271,7 @@ def estimate_weight() -> Response:
         # Apply session calibration
         if session_id in session_calibration:
             processor.pixel_to_cm_ratio = session_calibration[session_id]
+            processor._pixel_ratio_user_set = True
 
         # Apply per-request pixel_ratio override
         if pixel_ratio:
@@ -278,6 +279,7 @@ def estimate_weight() -> Response:
                 val = float(pixel_ratio)
                 if val > 0:
                     processor.pixel_to_cm_ratio = val
+                    processor._pixel_ratio_user_set = True
                     session_calibration[session_id] = val
             except (ValueError, TypeError):
                 pass
@@ -289,6 +291,7 @@ def estimate_weight() -> Response:
                 ref_px_val = float(reference_pixels)
                 if ref_cm_val > 0 and ref_px_val > 0:
                     processor.calibrate_pixel_ratio(ref_cm_val, ref_px_val)
+                    processor._pixel_ratio_user_set = True
                     session_calibration[session_id] = processor.pixel_to_cm_ratio
             except (ValueError, TypeError):
                 pass
@@ -385,7 +388,7 @@ def estimate_weight() -> Response:
         'estimated_girth': result['estimated_girth'],
         'animal_type': result['animal_type'],
         'confidence_score': result['confidence_score'],
-        'pixel_to_cm_ratio': processor.pixel_to_cm_ratio,
+        'pixel_to_cm_ratio': result.get('pixel_to_cm_ratio', processor.pixel_to_cm_ratio),
         'image_quality': quality_info,
         'expected_weight_range': result.get('expected_weight_range'),
         'within_expected_range': result.get('within_expected_range'),
