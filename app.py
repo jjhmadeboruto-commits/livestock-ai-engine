@@ -2,6 +2,9 @@ import base64
 from io import BytesIO
 from datetime import datetime
 import importlib.util
+import logging
+
+logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
 
 import cv2
 import numpy as np
