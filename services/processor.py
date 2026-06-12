@@ -14,14 +14,14 @@ class AnimalProcessor:
 
     # Regulated agricultural metric formulas and density bounds
     LIVESTOCK_CALIBRATION = {
-        "dairy_cow":    {"divisor": 660.0,  "girth_multiplier": 0.84, "name": "Dairy Cow",          "expected_range": [250, 800],  "coco_classes": {19}}, # Cow (Class 19)
-        "beef_cattle":  {"divisor": 600.0,  "girth_multiplier": 0.88, "name": "Beef Cattle",        "expected_range": [300, 1000], "coco_classes": {19}}, # Cow (Class 19)
-        "young_cattle": {"divisor": 640.0,  "girth_multiplier": 0.82, "name": "Young Cattle/Calf",  "expected_range": [50, 300],   "coco_classes": {19}}, # Cow (Class 19)
-        "pig":          {"divisor": 400.0,  "girth_multiplier": 0.92, "name": "Pig",                 "expected_range": [20, 400],   "coco_classes": {18, 19}}, # Pig (COCO proxy: Sheep/Cow)
-        "goat":         {"divisor": 300.0,  "girth_multiplier": 0.78, "name": "Goat",                "expected_range": [15, 140],   "coco_classes": {18}}, # Goat (COCO proxy: Sheep Class 18)
-        "sheep":        {"divisor": 300.0,  "girth_multiplier": 0.80, "name": "Sheep",               "expected_range": [20, 160],   "coco_classes": {18}}, # Sheep (Class 18)
-        "donkey":       {"divisor": 480.0,  "girth_multiplier": 0.82, "name": "Donkey",              "expected_range": [80, 500],   "coco_classes": {17}}, # Donkey (COCO proxy: Horse Class 17)
-        "poultry":      {"divisor": 1200.0, "girth_multiplier": 0.55, "name": "Poultry",             "expected_range": [0.5, 8],    "coco_classes": {14}}, # Poultry (COCO: Bird Class 14)
+        "dairy_cow":    {"divisor": 660.0,  "girth_multiplier": 0.84, "name": "Dairy Cow",          "expected_range": [250, 800],  "coco_classes": {19}, "default_pixel_ratio": 0.15}, # Cow (Class 19)
+        "beef_cattle":  {"divisor": 600.0,  "girth_multiplier": 0.88, "name": "Beef Cattle",        "expected_range": [300, 1000], "coco_classes": {19}, "default_pixel_ratio": 0.15}, # Cow (Class 19)
+        "young_cattle": {"divisor": 640.0,  "girth_multiplier": 0.82, "name": "Young Cattle/Calf",  "expected_range": [50, 300],   "coco_classes": {19}, "default_pixel_ratio": 0.10}, # Cow (Class 19)
+        "pig":          {"divisor": 400.0,  "girth_multiplier": 0.92, "name": "Pig",                 "expected_range": [20, 400],   "coco_classes": {18, 19}, "default_pixel_ratio": 0.10}, # Pig (COCO proxy: Sheep/Cow)
+        "goat":         {"divisor": 300.0,  "girth_multiplier": 0.78, "name": "Goat",                "expected_range": [15, 140],   "coco_classes": {18}, "default_pixel_ratio": 0.08}, # Goat (COCO proxy: Sheep Class 18)
+        "sheep":        {"divisor": 300.0,  "girth_multiplier": 0.80, "name": "Sheep",               "expected_range": [20, 160],   "coco_classes": {18}, "default_pixel_ratio": 0.08}, # Sheep (Class 18)
+        "donkey":       {"divisor": 480.0,  "girth_multiplier": 0.82, "name": "Donkey",              "expected_range": [80, 500],   "coco_classes": {17}, "default_pixel_ratio": 0.12}, # Donkey (COCO proxy: Horse Class 17)
+        "poultry":      {"divisor": 1200.0, "girth_multiplier": 0.55, "name": "Poultry",             "expected_range": [0.5, 8],    "coco_classes": {14}, "default_pixel_ratio": 0.04}, # Poultry (COCO: Bird Class 14)
     }
 
     # Universally permitted COCO detection IDs: 14=bird, 17=horse, 18=sheep, 19=cow
@@ -29,11 +29,19 @@ class AnimalProcessor:
 
     _yolo_model = None
 
-    def __init__(self, pixel_to_cm_ratio: float = 0.15, animal_type: str = "dairy_cow") -> None:
-        self.pixel_to_cm_ratio = pixel_to_cm_ratio
+    def __init__(self, pixel_to_cm_ratio: float = None, animal_type: str = "dairy_cow") -> None:
         self.animal_type = animal_type.lower()
         if self.animal_type not in self.LIVESTOCK_CALIBRATION:
             self.animal_type = "dairy_cow"
+
+        calibration = self.LIVESTOCK_CALIBRATION[self.animal_type]
+        # Track whether the user explicitly provided a pixel ratio so auto-correction
+        # knows not to overwrite a deliberate user calibration.
+        self._pixel_ratio_user_set = pixel_to_cm_ratio is not None
+        if pixel_to_cm_ratio is None:
+            self.pixel_to_cm_ratio = calibration.get("default_pixel_ratio", 0.15)
+        else:
+            self.pixel_to_cm_ratio = pixel_to_cm_ratio
 
         if self.__class__._yolo_model is None:
             try:
@@ -212,10 +220,19 @@ class AnimalProcessor:
         if girth_multiplier is not None:
             self.LIVESTOCK_CALIBRATION[animal_type]["girth_multiplier"] = float(girth_multiplier)
 
-    def set_animal_type(self, animal_type: str) -> None:
+    def set_animal_type(self, animal_type: str, update_pixel_ratio: bool = False) -> None:
+        """Change the active animal type. If update_pixel_ratio is True (used by
+        auto-correction), also resets pixel_to_cm_ratio to the new animal's default
+        unless the user explicitly provided their own ratio at construction time."""
         animal_type = animal_type.lower()
         if animal_type in self.LIVESTOCK_CALIBRATION:
             self.animal_type = animal_type
+            # Only reset the pixel ratio when auto-correcting AND the user hasn't
+            # provided their own calibration — prevents stomping deliberate overrides.
+            if update_pixel_ratio and not getattr(self, '_pixel_ratio_user_set', False):
+                new_default = self.LIVESTOCK_CALIBRATION[animal_type].get("default_pixel_ratio", 0.15)
+                self.pixel_to_cm_ratio = new_default
+                logging.info(f"Pixel ratio reset to {new_default} for auto-corrected type: {animal_type}")
         else:
             raise ValueError(f"Invalid selector: {animal_type}")
 
@@ -301,11 +318,13 @@ class AnimalProcessor:
                     final_cls = int(box.cls[0])
                     break
 
-        # Apply auto-correction if the final selected box is of a different species
+        # Apply auto-correction if the final selected box is of a different species.
+        # Pass update_pixel_ratio=True so the pixel scale is also corrected — this
+        # is the root cause of the 134.2 kg chicken bug (cattle ratio on poultry math).
         if final_box is not None and final_cls in class_mapping and final_cls not in target_classes:
             detected_type = class_mapping[final_cls]
-            logging.info(f"Auto-correcting animal type override to: {detected_type}")
-            self.set_animal_type(detected_type)
+            logging.info(f"Auto-correcting animal type AND pixel ratio to: {detected_type}")
+            self.set_animal_type(detected_type, update_pixel_ratio=True)
 
         # 5. Check if the final selected box passes the minimum size threshold (noise reduction)
         if final_box is not None:
