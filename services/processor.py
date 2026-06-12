@@ -61,8 +61,23 @@ class AnimalProcessor:
     }
 
     _yolo_model = None
-    _classifier_model = None
+    _clip_model = None
+    _clip_processor = None
     rejected_reason = None
+
+    # ── CLIP text prompts for zero-shot species classification ────────────────
+    # Each inner list holds synonym prompts — CLIP score is averaged per category.
+    CLIP_PROMPTS = {
+        "pig":          ["a pig", "a domestic pig", "a hog", "a swine", "a piglet"],
+        "dairy_cow":    ["a dairy cow", "a Holstein cow", "a milk cow"],
+        "beef_cattle":  ["a beef cattle", "a Angus bull", "a steer"],
+        "young_cattle": ["a calf", "a young cow", "a baby cattle"],
+        "sheep":        ["a sheep", "a wool sheep", "a ram", "a ewe", "a lamb"],
+        "goat":         ["a goat", "a billy goat", "a nanny goat", "a mountain goat"],
+        "donkey":       ["a donkey", "a mule", "a burro", "a domestic donkey"],
+        "poultry":      ["a chicken", "a hen", "a rooster", "a turkey", "a duck", "a poultry bird"],
+        "invalid":      ["a person", "a human", "a dog", "a cat", "a vehicle", "a building", "a car"],
+    }
 
     def __init__(self, pixel_to_cm_ratio: float = None, animal_type: str = "dairy_cow") -> None:
         self.animal_type = animal_type.lower()
@@ -130,36 +145,20 @@ class AnimalProcessor:
 
         self.model = self.__class__._yolo_model if self.__class__._yolo_model else None
 
-        if self.__class__._classifier_model is None:
+        if self.__class__._clip_model is None:
             try:
-                import torch
-                from ultralytics import YOLO
-                import os
-
-                current_file_path = os.path.abspath(__file__)
-                services_dir = os.path.dirname(current_file_path)
-                root_dir = os.path.dirname(services_dir)
-
-                cls_path_options = [
-                    os.path.join(root_dir, "models", "yolov8n-cls.pt"),
-                    os.path.join(os.getcwd(), "models", "yolov8n-cls.pt"),
-                    os.path.join(os.getcwd(), "yolov8n-cls.pt"),
-                    "yolov8n-cls.pt"
-                ]
-
-                selected_cls_path = None
-                for path in cls_path_options:
-                    if os.path.exists(path):
-                        selected_cls_path = path
-                        break
-
-                if selected_cls_path:
-                    self.__class__._classifier_model = YOLO(selected_cls_path)
-                else:
-                    self.__class__._classifier_model = YOLO("yolov8n-cls.pt")
+                from transformers import CLIPProcessor, CLIPModel
+                logging.info("Loading CLIP model for zero-shot livestock species classification...")
+                clip = CLIPModel.from_pretrained("openai/clip-vit-base-patch32")
+                proc = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
+                clip.eval()
+                self.__class__._clip_model     = clip
+                self.__class__._clip_processor = proc
+                logging.info("CLIP model loaded successfully.")
             except Exception as e:
-                logging.error(f"Failed to compile YOLO classifier: {e}")
-                self.__class__._classifier_model = False
+                logging.error(f"Failed to load CLIP model: {e}")
+                self.__class__._clip_model     = False
+                self.__class__._clip_processor = False
 
     def process(self, image_bgr: np.ndarray) -> Optional[Dict[str, object]]:
         """Executes targeted object extraction and converts pixel space into physical mass."""
@@ -353,90 +352,78 @@ class AnimalProcessor:
         return cls.LIVESTOCK_CALIBRATION.copy()
 
     def _get_crop_animal_type(self, crop: np.ndarray) -> Optional[str]:
-        if not self.__class__._classifier_model:
+        """
+        Uses CLIP zero-shot classification to identify the livestock species in a
+        cropped image region. CLIP understands free-form text prompts so it can
+        directly distinguish pig from cow, donkey from horse, goat from sheep — all
+        without any domain-specific training data.
+        """
+        clip_model     = self.__class__._clip_model
+        clip_processor = self.__class__._clip_processor
+        if not clip_model or not clip_processor:
             return None
         try:
-            results = self.__class__._classifier_model(crop, verbose=False)[0]
-            probs = results.probs
-            if probs is None:
-                return None
-            
-            scores = {
-                "pig": 0.0,
-                "cattle": 0.0,
-                "sheep": 0.0,
-                "goat": 0.0,
-                "donkey": 0.0,
-                "poultry": 0.0,
-                "invalid": 0.0
+            import torch
+            from PIL import Image as PILImage
+
+            # Convert BGR (OpenCV) crop to RGB PIL image
+            rgb = cv2.cvtColor(crop, cv2.COLOR_BGR2RGB)
+            pil_img = PILImage.fromarray(rgb)
+
+            # Build flat list of all prompts and track which category each belongs to
+            all_prompts: list[str] = []
+            prompt_category: list[str] = []
+            for category, prompts in self.CLIP_PROMPTS.items():
+                for p in prompts:
+                    all_prompts.append(p)
+                    prompt_category.append(category)
+
+            # Run CLIP inference
+            inputs = clip_processor(
+                text=all_prompts,
+                images=pil_img,
+                return_tensors="pt",
+                padding=True
+            )
+            with torch.no_grad():
+                outputs = clip_model(**inputs)
+                logits = outputs.logits_per_image[0]          # shape: (num_prompts,)
+                probs  = logits.softmax(dim=0).cpu().tolist()
+
+            # Accumulate per-category scores (average over synonyms)
+            cat_scores: dict[str, float] = {cat: 0.0 for cat in self.CLIP_PROMPTS}
+            cat_counts: dict[str, int]   = {cat: 0   for cat in self.CLIP_PROMPTS}
+            for score, category in zip(probs, prompt_category):
+                cat_scores[category] += score
+                cat_counts[category] += 1
+            cat_avg = {
+                cat: (cat_scores[cat] / cat_counts[cat]) if cat_counts[cat] else 0.0
+                for cat in cat_scores
             }
-            
-            # Map top-5 indices and accumulate probabilities
-            top5_indices = probs.top5
-            for idx in top5_indices:
-                conf = float(probs.data[idx])
-                name = results.names[idx].lower()
-                
-                # Check invalid list first
-                if any(x in name for x in ["dog", "cat", "person", "human", "man", "woman", "boy", "girl", "child", "vehicle", "car", "truck", "tractor", "chair", "table", "bicycle", "motorcycle"]):
-                    scores["invalid"] += conf
-                    continue
-                
-                # Accumulate matching scores
-                if any(x in name for x in ["pig", "hog", "boar", "swine"]):
-                    scores["pig"] += conf
-                if any(x in name for x in ["cow", "bull", "ox", "cattle", "steer", "calf", "heifer", "bison", "buffalo"]):
-                    scores["cattle"] += conf
-                if any(x in name for x in ["sheep", "ram", "ewe", "lamb", "mutton", "bighorn"]):
-                    scores["sheep"] += conf
-                if any(x in name for x in ["goat", "capra", "billy", "nanny", "ibex"]):
-                    scores["goat"] += conf
-                if any(x in name for x in ["donkey", "mule", "ass", "horse", "foal", "colt", "stallion", "equus", "sorrel", "zebra"]):
-                    scores["donkey"] += conf
-                if any(x in name for x in ["hen", "chicken", "rooster", "poultry", "fowl", "bird", "turkey", "duck", "goose", "ostrich"]):
-                    scores["poultry"] += conf
-            
-            # Determine highest scoring group
-            best_cat = None
-            best_score = 0.0
-            for cat, score in scores.items():
-                if score > best_score:
-                    best_score = score
-                    best_cat = cat
-            
-            # Require minimum score to prevent acting on low-level background noise
-            if best_score > 0.15 and best_cat is not None:
-                if best_cat == "invalid":
-                    return "invalid"
-                elif best_cat == "cattle":
-                    if self.animal_type in {"dairy_cow", "beef_cattle", "young_cattle"}:
-                        return self.animal_type
-                    return "dairy_cow"
-                return best_cat
-            
-            # Keyword fallback on top-1 index
-            top1_idx = int(probs.top1)
-            name = results.names[top1_idx].lower()
-            if any(x in name for x in ["dog", "cat", "person", "human", "man", "woman", "boy", "girl", "child", "vehicle", "car", "truck", "tractor", "chair", "table"]):
+
+            best_cat   = max(cat_avg, key=cat_avg.get)
+            best_score = cat_avg[best_cat]
+
+            logging.info(f"CLIP category scores: { {k: round(v,4) for k, v in cat_avg.items()} }")
+            logging.info(f"CLIP best: '{best_cat}' @ {best_score:.4f}")
+
+            # Minimum confidence gate (avoids acting on noise in very blurry crops)
+            if best_score < 0.05:
+                return None
+
+            if best_cat == "invalid":
                 return "invalid"
-            if any(x in name for x in ["pig", "hog", "boar", "swine"]):
-                return "pig"
-            if any(x in name for x in ["cow", "bull", "ox", "cattle", "steer", "calf", "heifer", "bison", "buffalo"]):
+
+            # Cattle sub-type: honour user's specific cattle selection if CLIP confirms cattle
+            if best_cat in {"dairy_cow", "beef_cattle", "young_cattle"}:
                 if self.animal_type in {"dairy_cow", "beef_cattle", "young_cattle"}:
                     return self.animal_type
                 return "dairy_cow"
-            if any(x in name for x in ["sheep", "ram", "ewe", "lamb", "bighorn"]):
-                return "sheep"
-            if any(x in name for x in ["goat", "capra", "billy", "nanny", "ibex"]):
-                return "goat"
-            if any(x in name for x in ["donkey", "mule", "ass", "horse", "foal", "colt", "stallion", "equus", "sorrel", "zebra"]):
-                return "donkey"
-            if any(x in name for x in ["hen", "chicken", "rooster", "poultry", "fowl", "bird", "turkey", "duck", "goose", "ostrich"]):
-                return "poultry"
-            
-            return None
+
+            return best_cat
+
         except Exception as e:
-            logging.error(f"Classifier run failure: {e}")
+            logging.error(f"CLIP classification failure: {e}")
             return None
 
     def _yolo_detect(self, image_bgr: np.ndarray, target_classes: set, results: Any = None) -> Optional[Tuple[int, int, int, int, float]]:

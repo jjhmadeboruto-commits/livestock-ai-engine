@@ -26,6 +26,12 @@ RUN mkdir -p /app/models && \
     cp -f yolov8n.pt /app/models/yolov8n.pt 2>/dev/null || true && \
     find / -name 'yolov8n.pt' -type f 2>/dev/null | head -1 | xargs -I{} cp {} /app/models/yolov8n.pt 2>/dev/null || true
 
+# Download CLIP model weights at build time so the first request doesn't time out
+RUN python -c "from transformers import CLIPModel, CLIPProcessor; \
+    CLIPModel.from_pretrained('openai/clip-vit-base-patch32'); \
+    CLIPProcessor.from_pretrained('openai/clip-vit-base-patch32'); \
+    print('CLIP model cached successfully.')"
+
 # Copy the rest of the application
 COPY . .
 
