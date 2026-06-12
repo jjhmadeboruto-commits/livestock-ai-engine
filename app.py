@@ -113,6 +113,76 @@ def index():
     }), 200
 
 
+@app.route('/api/debug-yolo', methods=['GET'])
+def debug_yolo() -> Response:
+    import os
+    import sys
+    import traceback
+    
+    current_file_path = os.path.abspath(__file__)
+    services_dir = os.path.join(os.path.dirname(current_file_path), "services")
+    root_dir = os.path.dirname(current_file_path)
+    
+    path_options = [
+        os.path.join(root_dir, "models", "yolov8n.pt"),
+        os.path.join(os.getcwd(), "models", "yolov8n.pt"),
+        os.path.join(os.getcwd(), "yolov8n.pt"),
+        "yolov8n.pt"
+    ]
+    
+    path_existence = {path: os.path.exists(path) if not path.endswith(".pt") or os.path.isabs(path) else "unknown" for path in path_options}
+    
+    # Try finding it globally or scanning directory
+    dir_contents = []
+    try:
+        dir_contents = os.listdir(os.getcwd())
+        if os.path.exists("models"):
+            dir_contents.append({"models": os.listdir("models")})
+    except Exception as e:
+        dir_contents = [f"error listing: {e}"]
+        
+    yolo_load_status = "Not attempted"
+    yolo_error = None
+    
+    try:
+        import torch
+        # Apply the override
+        original_load = torch.load
+        def safe_load(*args, **kwargs):
+            kwargs['weights_only'] = False
+            return original_load(*args, **kwargs)
+        torch.load = safe_load
+        
+        from ultralytics import YOLO
+        
+        # Test loading
+        selected_path = None
+        for path in path_options:
+            if isinstance(path_existence.get(path), bool) and path_existence.get(path):
+                selected_path = path
+                break
+        
+        if not selected_path:
+            selected_path = "yolov8n.pt"
+            
+        model = YOLO(selected_path)
+        yolo_load_status = f"Successfully loaded YOLO using {selected_path}!"
+    except Exception as e:
+        yolo_load_status = "Failed to load YOLO"
+        yolo_error = f"{type(e).__name__}: {str(e)}\n{traceback.format_exc()}"
+        
+    return jsonify({
+        'cwd': os.getcwd(),
+        'sys_path': sys.path,
+        'path_options': path_options,
+        'path_existence': path_existence,
+        'dir_contents': dir_contents,
+        'yolo_load_status': yolo_load_status,
+        'yolo_error': yolo_error,
+        'torch_version': torch.__version__ if 'torch' in sys.modules else None
+    }), 200
+
+
 @app.route('/api/debug-mediapipe', methods=['GET'])
 def debug_mediapipe() -> Response:
     mp_spec = importlib.util.find_spec('mediapipe')
