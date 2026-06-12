@@ -4,4 +4,5 @@ node_modules/
 *.log
 .vscode/
 *.whl
+*.pt
 .venv/

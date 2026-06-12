@@ -20,6 +20,12 @@ RUN pip install --no-cache-dir ultralytics "numpy<2.0.0"
 RUN pip uninstall -y opencv-python opencv-python-headless && \
     pip install --no-cache-dir opencv-python-headless==4.8.1.78 "numpy<2.0.0"
 
+# Download YOLOv8n weights at build time (avoids runtime download issues on free tier)
+RUN mkdir -p /app/models && \
+    python -c "from ultralytics import YOLO; model = YOLO('yolov8n.pt')" && \
+    cp -f yolov8n.pt /app/models/yolov8n.pt 2>/dev/null || true && \
+    find / -name 'yolov8n.pt' -type f 2>/dev/null | head -1 | xargs -I{} cp {} /app/models/yolov8n.pt 2>/dev/null || true
+
 # Copy the rest of the application
 COPY . .
 
