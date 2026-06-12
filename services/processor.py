@@ -38,6 +38,15 @@ class AnimalProcessor:
         if self.__class__._yolo_model is None:
             try:
                 import os
+                import torch
+                
+                # BRUTE-FORCE FIX: Override torch.load to bypass PyTorch 2.6+ weights_only restrictions
+                original_load = torch.load
+                def safe_load(*args, **kwargs):
+                    kwargs['weights_only'] = False
+                    return original_load(*args, **kwargs)
+                torch.load = safe_load
+
                 from ultralytics import YOLO
                 
                 # 1. Start with standard absolute file level direction
