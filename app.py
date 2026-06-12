@@ -167,8 +167,36 @@ def debug_yolo() -> Response:
             
         model = YOLO(selected_path)
         yolo_load_status = f"Successfully loaded YOLO using {selected_path}!"
+        
+        # Test inference with a dummy image first
+        dummy_img = np.zeros((640, 640, 3), dtype=np.uint8)
+        dummy_res = model(dummy_img, verbose=False)[0]
+        yolo_load_status += " Tested dummy inference successfully."
+        
+        # Now try download and detect chicken
+        import urllib.request
+        temp_chicken_path = "/tmp/test_chicken.jpg"
+        urllib.request.urlretrieve("https://images.unsplash.com/photo-1548550023-2bdb3c5beed7?w=640", temp_chicken_path)
+        chicken_img = cv2.imread(temp_chicken_path)
+        
+        detection_results = []
+        if chicken_img is not None:
+            results = model(chicken_img, verbose=False, conf=0.10)[0]
+            for box in results.boxes:
+                cls_id = int(box.cls[0])
+                conf = float(box.conf[0])
+                x1, y1, x2, y2 = map(int, box.xyxy[0])
+                detection_results.append({
+                    'class_id': cls_id,
+                    'class_name': model.names[cls_id] if hasattr(model, 'names') and cls_id in model.names else 'unknown',
+                    'confidence': conf,
+                    'box': [x1, y1, x2, y2]
+                })
+        else:
+            yolo_load_status += " Failed to read downloaded chicken image."
+            
     except Exception as e:
-        yolo_load_status = "Failed to load YOLO"
+        yolo_load_status = "Failed to load/run YOLO"
         yolo_error = f"{type(e).__name__}: {str(e)}\n{traceback.format_exc()}"
         
     return jsonify({
@@ -179,6 +207,7 @@ def debug_yolo() -> Response:
         'dir_contents': dir_contents,
         'yolo_load_status': yolo_load_status,
         'yolo_error': yolo_error,
+        'detection_results': detection_results,
         'torch_version': torch.__version__ if 'torch' in sys.modules else None
     }), 200
 
