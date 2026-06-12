@@ -539,6 +539,8 @@ class AnimalProcessor:
                     logging.info(f"Cross-group fallback mismatch: user='{self.animal_type}', YOLO class {final_cls} → corrected to '{corrected_type}'")
                     self.set_animal_type(corrected_type, update_pixel_ratio=True)
 
+        return (x1, y1, x2, y2, conf)
+
     def _fallback_contour_detection(self, image_bgr: np.ndarray) -> Optional[Tuple[int, int, int, int]]:
         height, width = image_bgr.shape[:2]
         max_dim = 640.0
