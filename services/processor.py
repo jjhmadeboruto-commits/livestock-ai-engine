@@ -61,6 +61,8 @@ class AnimalProcessor:
     }
 
     _yolo_model = None
+    _classifier_model = None
+    rejected_reason = None
 
     def __init__(self, pixel_to_cm_ratio: float = None, animal_type: str = "dairy_cow") -> None:
         self.animal_type = animal_type.lower()
@@ -128,6 +130,37 @@ class AnimalProcessor:
 
         self.model = self.__class__._yolo_model if self.__class__._yolo_model else None
 
+        if self.__class__._classifier_model is None:
+            try:
+                import torch
+                from ultralytics import YOLO
+                import os
+
+                current_file_path = os.path.abspath(__file__)
+                services_dir = os.path.dirname(current_file_path)
+                root_dir = os.path.dirname(services_dir)
+
+                cls_path_options = [
+                    os.path.join(root_dir, "models", "yolov8n-cls.pt"),
+                    os.path.join(os.getcwd(), "models", "yolov8n-cls.pt"),
+                    os.path.join(os.getcwd(), "yolov8n-cls.pt"),
+                    "yolov8n-cls.pt"
+                ]
+
+                selected_cls_path = None
+                for path in cls_path_options:
+                    if os.path.exists(path):
+                        selected_cls_path = path
+                        break
+
+                if selected_cls_path:
+                    self.__class__._classifier_model = YOLO(selected_cls_path)
+                else:
+                    self.__class__._classifier_model = YOLO("yolov8n-cls.pt")
+            except Exception as e:
+                logging.error(f"Failed to compile YOLO classifier: {e}")
+                self.__class__._classifier_model = False
+
     def process(self, image_bgr: np.ndarray) -> Optional[Dict[str, object]]:
         """Executes targeted object extraction and converts pixel space into physical mass."""
         annotated_image = image_bgr.copy()
@@ -163,7 +196,22 @@ class AnimalProcessor:
 
         # Step 1: Run YOLO detection with species class context matching
         if self.model and yolo_results is not None:
+            self.rejected_reason = None
             box = self._yolo_detect(image_bgr, target_coco_classes, yolo_results)
+            if self.rejected_reason:
+                return {
+                    "weight": 0.0,
+                    "body_length": 0.0,
+                    "body_height": 0.0,
+                    "estimated_girth": 0.0,
+                    "animal_type": "Invalid Target",
+                    "confidence_score": 0.0,
+                    "annotated_image": image_bgr,
+                    "expected_weight_range": [0, 0],
+                    "within_expected_range": False,
+                    "method": "rejected",
+                    "error_message": self.rejected_reason
+                }
             if box is not None:
                 # Refresh calibration reference in case auto-correction happened inside _yolo_detect
                 calibration = self.LIVESTOCK_CALIBRATION[self.animal_type]
@@ -183,6 +231,37 @@ class AnimalProcessor:
             box = self._fallback_contour_detection(image_bgr)
             if box is not None:
                 x1, y1, x2, y2 = box
+                
+                # Crop and verify contour fallback crop to prevent mismatch or invalid targets
+                crop = image_bgr[y1:y2, x1:x2]
+                classified_type = self._get_crop_animal_type(crop)
+                
+                if classified_type == "invalid":
+                    return {
+                        "weight": 0.0,
+                        "body_length": 0.0,
+                        "body_height": 0.0,
+                        "estimated_girth": 0.0,
+                        "animal_type": "Invalid Target",
+                        "confidence_score": 0.0,
+                        "annotated_image": image_bgr,
+                        "expected_weight_range": [0, 0],
+                        "within_expected_range": False,
+                        "method": "rejected",
+                        "error_message": "Unrecognized animal or object detected. Please scan only supported livestock species."
+                    }
+                elif classified_type is not None:
+                    is_user_cattle = self.animal_type in {"dairy_cow", "beef_cattle", "young_cattle"}
+                    is_classified_cattle = classified_type in {"dairy_cow", "beef_cattle", "young_cattle"}
+                    
+                    if is_user_cattle and is_classified_cattle:
+                        logging.info(f"Contour Fallback confirmed Cattle. Keeping user specific: {self.animal_type}")
+                    else:
+                        if self.animal_type != classified_type:
+                            logging.info(f"Contour Fallback auto-correcting '{self.animal_type}' to '{classified_type}' based on crop classification.")
+                            self.set_animal_type(classified_type, update_pixel_ratio=True)
+                            calibration = self.LIVESTOCK_CALIBRATION[self.animal_type]
+
                 cv2.rectangle(annotated_image, (x1, y1), (x2, y2), (0, 255, 0), 2)
                 cv2.putText(
                     annotated_image,
@@ -273,19 +352,96 @@ class AnimalProcessor:
     def get_available_types(cls) -> dict:
         return cls.LIVESTOCK_CALIBRATION.copy()
 
+    def _get_crop_animal_type(self, crop: np.ndarray) -> Optional[str]:
+        if not self.__class__._classifier_model:
+            return None
+        try:
+            results = self.__class__._classifier_model(crop, verbose=False)[0]
+            probs = results.probs
+            if probs is None:
+                return None
+            
+            scores = {
+                "pig": 0.0,
+                "cattle": 0.0,
+                "sheep": 0.0,
+                "goat": 0.0,
+                "donkey": 0.0,
+                "poultry": 0.0,
+                "invalid": 0.0
+            }
+            
+            # Map top-5 indices and accumulate probabilities
+            top5_indices = probs.top5
+            for idx in top5_indices:
+                conf = float(probs.data[idx])
+                name = results.names[idx].lower()
+                
+                # Check invalid list first
+                if any(x in name for x in ["dog", "cat", "person", "human", "man", "woman", "boy", "girl", "child", "vehicle", "car", "truck", "tractor", "chair", "table", "bicycle", "motorcycle"]):
+                    scores["invalid"] += conf
+                    continue
+                
+                # Accumulate matching scores
+                if any(x in name for x in ["pig", "hog", "boar", "swine"]):
+                    scores["pig"] += conf
+                if any(x in name for x in ["cow", "bull", "ox", "cattle", "steer", "calf", "heifer", "bison", "buffalo"]):
+                    scores["cattle"] += conf
+                if any(x in name for x in ["sheep", "ram", "ewe", "lamb", "mutton", "bighorn"]):
+                    scores["sheep"] += conf
+                if any(x in name for x in ["goat", "capra", "billy", "nanny", "ibex"]):
+                    scores["goat"] += conf
+                if any(x in name for x in ["donkey", "mule", "ass", "horse", "foal", "colt", "stallion", "equus", "sorrel", "zebra"]):
+                    scores["donkey"] += conf
+                if any(x in name for x in ["hen", "chicken", "rooster", "poultry", "fowl", "bird", "turkey", "duck", "goose", "ostrich"]):
+                    scores["poultry"] += conf
+            
+            # Determine highest scoring group
+            best_cat = None
+            best_score = 0.0
+            for cat, score in scores.items():
+                if score > best_score:
+                    best_score = score
+                    best_cat = cat
+            
+            # Require minimum score to prevent acting on low-level background noise
+            if best_score > 0.15 and best_cat is not None:
+                if best_cat == "invalid":
+                    return "invalid"
+                elif best_cat == "cattle":
+                    if self.animal_type in {"dairy_cow", "beef_cattle", "young_cattle"}:
+                        return self.animal_type
+                    return "dairy_cow"
+                return best_cat
+            
+            # Keyword fallback on top-1 index
+            top1_idx = int(probs.top1)
+            name = results.names[top1_idx].lower()
+            if any(x in name for x in ["dog", "cat", "person", "human", "man", "woman", "boy", "girl", "child", "vehicle", "car", "truck", "tractor", "chair", "table"]):
+                return "invalid"
+            if any(x in name for x in ["pig", "hog", "boar", "swine"]):
+                return "pig"
+            if any(x in name for x in ["cow", "bull", "ox", "cattle", "steer", "calf", "heifer", "bison", "buffalo"]):
+                if self.animal_type in {"dairy_cow", "beef_cattle", "young_cattle"}:
+                    return self.animal_type
+                return "dairy_cow"
+            if any(x in name for x in ["sheep", "ram", "ewe", "lamb", "bighorn"]):
+                return "sheep"
+            if any(x in name for x in ["goat", "capra", "billy", "nanny", "ibex"]):
+                return "goat"
+            if any(x in name for x in ["donkey", "mule", "ass", "horse", "foal", "colt", "stallion", "equus", "sorrel", "zebra"]):
+                return "donkey"
+            if any(x in name for x in ["hen", "chicken", "rooster", "poultry", "fowl", "bird", "turkey", "duck", "goose", "ostrich"]):
+                return "poultry"
+            
+            return None
+        except Exception as e:
+            logging.error(f"Classifier run failure: {e}")
+            return None
+
     def _yolo_detect(self, image_bgr: np.ndarray, target_classes: set, results: Any = None) -> Optional[Tuple[int, int, int, int, float]]:
         """
-        Runs YOLO detection with intelligent group-based auto-correction.
-
-        Correction philosophy:
-        - COCO dataset has no pig, goat, or donkey class. They appear as
-          their nearest proxy: pig→cow(19), goat→sheep(18), donkey→horse(17).
-        - Animals are grouped by body plan (large_quad, small_quad, equine, avian).
-        - If YOLO detects an animal in the SAME group as the user's selection,
-          we TRUST the user's button (they know what they're photographing),
-          and only reset the pixel ratio if crossing pixel-scale boundaries.
-        - We only FORCE an animal type correction on definitive cross-group
-          mismatches, e.g. bird (avian) detected when user said cattle (large_quad).
+        Runs YOLO detection with crop-based classifier species verification.
         """
         if results is None:
             try:
@@ -293,6 +449,19 @@ class AnimalProcessor:
             except Exception as e:
                 logging.error(f"YOLO engine failure: {e}")
                 return None
+
+        # Check for any dominant non-livestock target (e.g. dog, cat, person) in the entire image
+        largest_non_livestock_class = -1
+        largest_non_livestock_area = 0
+        for box in results.boxes:
+            cls_id = int(box.cls[0])
+            conf = float(box.conf[0])
+            if cls_id not in self.YOLO_LIVESTOCK_CLASSES and conf > 0.35:
+                x1_nl, y1_nl, x2_nl, y2_nl = map(int, box.xyxy[0])
+                area = (x2_nl - x1_nl) * (y2_nl - y1_nl)
+                if area > largest_non_livestock_area:
+                    largest_non_livestock_area = area
+                    largest_non_livestock_class = cls_id
 
         # ── Step 1: Find the largest detected livestock animal ────────────────
         final_box = None
@@ -326,47 +495,49 @@ class AnimalProcessor:
                     final_box = (x1, y1, x2, y2, conf)
                     final_cls = cls_id
 
+        # If no livestock animal is detected, but a non-livestock object is present, reject it.
         if final_box is None:
+            if largest_non_livestock_area > 0:
+                cls_name = self.model.names[largest_non_livestock_class] if hasattr(self.model, 'names') else "unknown object"
+                self.rejected_reason = f"Invalid target ({cls_name}) detected. Please ensure only livestock animals (cattle, pig, donkey, sheep, goat, poultry) are in frame."
             return None
 
-        # ── Step 2: Group-based correction decision ───────────────────────────
-        detected_group = self.COCO_GROUPS.get(final_cls)
-        user_group     = self.ANIMAL_GROUP.get(self.animal_type)
-
-        if detected_group and user_group:
-            if detected_group == user_group:
-                # SAME body-plan group: trust the user's button selection.
-                # YOLO confirms there's an animal of the right scale in frame.
-                # Only update pixel ratio if the user's type default differs
-                # significantly from the detected class default (e.g. pig
-                # vs dairy_cow have different pixel ratios even though both
-                # appear as COCO class 19).
-                logging.info(
-                    f"YOLO class {final_cls} ({detected_group}) matches user '"
-                    f"{self.animal_type}' group — keeping user selection."
-                )
-                # No animal_type change, no pixel_ratio reset needed.
-
-            else:
-                # DIFFERENT body-plan group: definitive mismatch — correct both
-                # animal type AND pixel ratio.
-                corrected_type = self.COCO_CLASS_DEFAULT.get(final_cls, "dairy_cow")
-                logging.info(
-                    f"Cross-group mismatch: user='{self.animal_type}' ({user_group}), "
-                    f"YOLO class {final_cls} ({detected_group}) → correcting to '{corrected_type}'"
-                )
-                self.set_animal_type(corrected_type, update_pixel_ratio=True)
-        else:
-            logging.warning(f"Unknown group for detected class {final_cls} or animal '{self.animal_type}'")
-
-        # ── Step 3: Minimum size threshold (noise/false-positive filter) ──────
         x1, y1, x2, y2, conf = final_box
+
+        # ── Step 2: Minimum size threshold (noise/false-positive filter) ──────
         h, w = image_bgr.shape[:2]
         if (x2 - x1) * (y2 - y1) < (w * h * 0.03):
             logging.info("Detected box too small — likely a false positive, discarding.")
             return None
 
-        return final_box
+        # ── Step 3: Crop classifier verification ──────────────────────────────
+        crop = image_bgr[y1:y2, x1:x2]
+        classified_type = self._get_crop_animal_type(crop)
+
+        if classified_type == "invalid":
+            self.rejected_reason = "Unrecognized animal or object detected. Please scan only supported livestock species."
+            return None
+        elif classified_type is not None:
+            # Check if user selected one cattle type and classifier confirmed cattle
+            is_user_cattle = self.animal_type in {"dairy_cow", "beef_cattle", "young_cattle"}
+            is_classified_cattle = classified_type in {"dairy_cow", "beef_cattle", "young_cattle"}
+
+            if is_user_cattle and is_classified_cattle:
+                logging.info(f"Classifier confirmed Cattle. Keeping user specific selection: {self.animal_type}")
+            else:
+                if self.animal_type != classified_type:
+                    logging.info(f"Auto-correcting '{self.animal_type}' to '{classified_type}' based on crop classification.")
+                    self.set_animal_type(classified_type, update_pixel_ratio=True)
+        else:
+            # Fallback to group-based heuristics
+            detected_group = self.COCO_GROUPS.get(final_cls)
+            user_group     = self.ANIMAL_GROUP.get(self.animal_type)
+
+            if detected_group and user_group:
+                if detected_group != user_group:
+                    corrected_type = self.COCO_CLASS_DEFAULT.get(final_cls, "dairy_cow")
+                    logging.info(f"Cross-group fallback mismatch: user='{self.animal_type}', YOLO class {final_cls} → corrected to '{corrected_type}'")
+                    self.set_animal_type(corrected_type, update_pixel_ratio=True)
 
     def _fallback_contour_detection(self, image_bgr: np.ndarray) -> Optional[Tuple[int, int, int, int]]:
         height, width = image_bgr.shape[:2]

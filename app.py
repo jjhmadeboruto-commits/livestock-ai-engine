@@ -325,11 +325,12 @@ def estimate_weight() -> Response:
     finally:
         processor.pixel_to_cm_ratio = original_pixel_ratio
 
-    if result is None:
+    if result is None or result.get('method') == 'rejected':
+        error_msg = result.get('error_message') if result else 'Could not detect animal pose or bounding box.'
         return jsonify({
             'status': 'error',
             'success': False,
-            'message': 'Could not detect animal pose or bounding box.',
+            'message': error_msg,
             'error_type': 'detection_failed',
             'guidance': [
                 "Ensure the animal is standing in a clear side profile.",
