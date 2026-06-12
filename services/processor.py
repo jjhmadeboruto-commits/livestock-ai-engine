@@ -14,18 +14,18 @@ class AnimalProcessor:
 
     # Regulated agricultural metric formulas and density bounds
     LIVESTOCK_CALIBRATION = {
-        "dairy_cow":    {"divisor": 660.0,  "girth_multiplier": 0.84, "name": "Dairy Cow",          "expected_range": [250, 800],  "coco_classes": {21}}, # Cow
-        "beef_cattle":  {"divisor": 600.0,  "girth_multiplier": 0.88, "name": "Beef Cattle",        "expected_range": [300, 1000], "coco_classes": {21}}, # Cow
-        "young_cattle": {"divisor": 640.0,  "girth_multiplier": 0.82, "name": "Young Cattle/Calf",  "expected_range": [50, 300],   "coco_classes": {21}}, # Cow
-        "pig":          {"divisor": 400.0,  "girth_multiplier": 0.92, "name": "Pig",                 "expected_range": [20, 400],   "coco_classes": {22}}, # Pig (Class 22)
-        "goat":         {"divisor": 300.0,  "girth_multiplier": 0.78, "name": "Goat",                "expected_range": [15, 140],   "coco_classes": {20, 21}}, # Proxy: Sheep/Cow
-        "sheep":        {"divisor": 300.0,  "girth_multiplier": 0.80, "name": "Sheep",               "expected_range": [20, 160],   "coco_classes": {20}}, # Sheep
-        "donkey":       {"divisor": 480.0,  "girth_multiplier": 0.82, "name": "Donkey",              "expected_range": [80, 500],   "coco_classes": {19}}, # Proxy: Horse
-        "poultry":      {"divisor": 1200.0, "girth_multiplier": 0.55, "name": "Poultry",             "expected_range": [0.5, 8],    "coco_classes": {16}}, # Bird
+        "dairy_cow":    {"divisor": 660.0,  "girth_multiplier": 0.84, "name": "Dairy Cow",          "expected_range": [250, 800],  "coco_classes": {19}}, # Cow (Class 19)
+        "beef_cattle":  {"divisor": 600.0,  "girth_multiplier": 0.88, "name": "Beef Cattle",        "expected_range": [300, 1000], "coco_classes": {19}}, # Cow (Class 19)
+        "young_cattle": {"divisor": 640.0,  "girth_multiplier": 0.82, "name": "Young Cattle/Calf",  "expected_range": [50, 300],   "coco_classes": {19}}, # Cow (Class 19)
+        "pig":          {"divisor": 400.0,  "girth_multiplier": 0.92, "name": "Pig",                 "expected_range": [20, 400],   "coco_classes": {18, 19}}, # Pig (COCO proxy: Sheep/Cow)
+        "goat":         {"divisor": 300.0,  "girth_multiplier": 0.78, "name": "Goat",                "expected_range": [15, 140],   "coco_classes": {18}}, # Goat (COCO proxy: Sheep Class 18)
+        "sheep":        {"divisor": 300.0,  "girth_multiplier": 0.80, "name": "Sheep",               "expected_range": [20, 160],   "coco_classes": {18}}, # Sheep (Class 18)
+        "donkey":       {"divisor": 480.0,  "girth_multiplier": 0.82, "name": "Donkey",              "expected_range": [80, 500],   "coco_classes": {17}}, # Donkey (COCO proxy: Horse Class 17)
+        "poultry":      {"divisor": 1200.0, "girth_multiplier": 0.55, "name": "Poultry",             "expected_range": [0.5, 8],    "coco_classes": {14}}, # Poultry (COCO: Bird Class 14)
     }
 
-    # Universally permitted COCO detection IDs: 16=bird, 19=horse, 20=sheep, 21=cow, 22=pig
-    YOLO_LIVESTOCK_CLASSES = {16, 19, 20, 21, 22}
+    # Universally permitted COCO detection IDs: 14=bird, 17=horse, 18=sheep, 19=cow
+    YOLO_LIVESTOCK_CLASSES = {14, 17, 18, 19}
 
     _yolo_model = None
 
@@ -232,7 +232,7 @@ class AnimalProcessor:
                 logging.error(f"YOLO engine failure: {e}")
                 return None
 
-        class_mapping = {16: "poultry", 20: "sheep", 21: "dairy_cow", 22: "pig", 19: "donkey"}
+        class_mapping = {14: "poultry", 18: "sheep", 19: "dairy_cow", 17: "donkey"}
 
         # 1. Identify the single largest animal/object detected to determine the main subject
         main_box = None
