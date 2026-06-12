@@ -27,6 +27,39 @@ class AnimalProcessor:
     # Universally permitted COCO detection IDs: 14=bird, 17=horse, 18=sheep, 19=cow
     YOLO_LIVESTOCK_CLASSES = {14, 17, 18, 19}
 
+    # ── Body-plan groups ──────────────────────────────────────────────────────
+    # COCO was not trained on livestock specifically. Animals get detected as
+    # their nearest COCO proxy:
+    #   pig   → class 19 (cow)     goat  → class 18 (sheep)
+    #   donkey→ class 17 (horse)   poultry→ class 14 (bird)
+    # We group them by body-plan so we only force-correct on DEFINITIVE
+    # cross-group mismatches (e.g. bird detected when user said cattle).
+    # Within a group the user's button selection is trusted because they
+    # know what animal they are actually photographing.
+    COCO_GROUPS = {
+        14: "avian",          # bird  → poultry
+        17: "equine",         # horse → donkey/mule
+        18: "small_quad",     # sheep → sheep or goat
+        19: "large_quad",     # cow   → dairy cow, beef cattle, calf, pig
+    }
+    ANIMAL_GROUP = {
+        "dairy_cow":    "large_quad",
+        "beef_cattle":  "large_quad",
+        "young_cattle": "large_quad",
+        "pig":          "large_quad",   # COCO sees pig as 'cow' → same group
+        "goat":         "small_quad",   # COCO sees goat as 'sheep' → same group
+        "sheep":        "small_quad",
+        "donkey":       "equine",
+        "poultry":      "avian",
+    }
+    # Best default livestock type per COCO class when a full correction IS needed
+    COCO_CLASS_DEFAULT = {
+        14: "poultry",
+        17: "donkey",
+        18: "sheep",
+        19: "dairy_cow",
+    }
+
     _yolo_model = None
 
     def __init__(self, pixel_to_cm_ratio: float = None, animal_type: str = "dairy_cow") -> None:
@@ -241,7 +274,19 @@ class AnimalProcessor:
         return cls.LIVESTOCK_CALIBRATION.copy()
 
     def _yolo_detect(self, image_bgr: np.ndarray, target_classes: set, results: Any = None) -> Optional[Tuple[int, int, int, int, float]]:
-        """Runs context-aware YOLO filter passes, prioritizing the largest animal by area, and auto-corrects mismatched animal selections."""
+        """
+        Runs YOLO detection with intelligent group-based auto-correction.
+
+        Correction philosophy:
+        - COCO dataset has no pig, goat, or donkey class. They appear as
+          their nearest proxy: pig→cow(19), goat→sheep(18), donkey→horse(17).
+        - Animals are grouped by body plan (large_quad, small_quad, equine, avian).
+        - If YOLO detects an animal in the SAME group as the user's selection,
+          we TRUST the user's button (they know what they're photographing),
+          and only reset the pixel ratio if crossing pixel-scale boundaries.
+        - We only FORCE an animal type correction on definitive cross-group
+          mismatches, e.g. bird (avian) detected when user said cattle (large_quad).
+        """
         if results is None:
             try:
                 results = self.model(image_bgr, verbose=False, conf=0.20)[0]
@@ -249,92 +294,79 @@ class AnimalProcessor:
                 logging.error(f"YOLO engine failure: {e}")
                 return None
 
-        class_mapping = {14: "poultry", 18: "sheep", 19: "dairy_cow", 17: "donkey"}
-
-        # 1. Identify the single largest animal/object detected to determine the main subject
-        main_box = None
-        main_area = 0
-        main_conf = 0.0
-        main_cls = -1
-
-        for box in results.boxes:
-            cls_id = int(box.cls[0])
-            conf = float(box.conf[0])
-            x1, y1, x2, y2 = map(int, box.xyxy[0])
-            area = (x2 - x1) * (y2 - y1)
-
-            if area > main_area:
-                main_area = area
-                main_conf = conf
-                main_box = (x1, y1, x2, y2, conf)
-                main_cls = cls_id
-
-        # 2. Find other boxes matching the target class group
-        best_box = None
-        best_area = 0
-        for box in results.boxes:
-            cls_id = int(box.cls[0])
-            conf = float(box.conf[0])
-            x1, y1, x2, y2 = map(int, box.xyxy[0])
-            area = (x2 - x1) * (y2 - y1)
-
-            if cls_id in target_classes:
-                if area > best_area:
-                    best_area = area
-                    best_box = (x1, y1, x2, y2, conf)
-
-        # 3. Find other broad livestock boxes
-        best_broad_box = None
-        best_broad_area = 0
-        for box in results.boxes:
-            cls_id = int(box.cls[0])
-            if cls_id in self.YOLO_LIVESTOCK_CLASSES:
-                conf = float(box.conf[0])
-                x1, y1, x2, y2 = map(int, box.xyxy[0])
-                area = (x2 - x1) * (y2 - y1)
-                if area > best_broad_area:
-                    best_broad_area = area
-                    best_broad_box = (x1, y1, x2, y2, conf)
-
-        # 4. Resolve the best candidate box
+        # ── Step 1: Find the largest detected livestock animal ────────────────
         final_box = None
         final_cls = -1
-        
-        if main_box is not None and (main_cls in target_classes or (main_cls in class_mapping and main_cls not in target_classes and main_conf > 0.40)):
-            final_box = main_box
-            final_cls = main_cls
-        elif best_box is not None:
-            final_box = best_box
-            # we need to know what class best_box was, but we only saved x1, y1, x2, y2, conf
-            # Let's extract it from the loop above or just re-match
+        best_area = 0
+
+        # Priority 1: largest box that matches user's selected COCO target classes
+        for box in results.boxes:
+            cls_id = int(box.cls[0])
+            if cls_id not in self.YOLO_LIVESTOCK_CLASSES:
+                continue
+            x1, y1, x2, y2 = map(int, box.xyxy[0])
+            conf = float(box.conf[0])
+            area = (x2 - x1) * (y2 - y1)
+            if cls_id in target_classes and area > best_area:
+                best_area = area
+                final_box = (x1, y1, x2, y2, conf)
+                final_cls = cls_id
+
+        # Priority 2: any livestock class (fallback if target class not found)
+        if final_box is None:
             for box in results.boxes:
-                if float(box.conf[0]) == final_box[4]:
-                    final_cls = int(box.cls[0])
-                    break
-        elif best_broad_box is not None:
-            final_box = best_broad_box
-            for box in results.boxes:
-                if float(box.conf[0]) == final_box[4]:
-                    final_cls = int(box.cls[0])
-                    break
+                cls_id = int(box.cls[0])
+                if cls_id not in self.YOLO_LIVESTOCK_CLASSES:
+                    continue
+                x1, y1, x2, y2 = map(int, box.xyxy[0])
+                conf = float(box.conf[0])
+                area = (x2 - x1) * (y2 - y1)
+                if area > best_area:
+                    best_area = area
+                    final_box = (x1, y1, x2, y2, conf)
+                    final_cls = cls_id
 
-        # Apply auto-correction if the final selected box is of a different species.
-        # Pass update_pixel_ratio=True so the pixel scale is also corrected — this
-        # is the root cause of the 134.2 kg chicken bug (cattle ratio on poultry math).
-        if final_box is not None and final_cls in class_mapping and final_cls not in target_classes:
-            detected_type = class_mapping[final_cls]
-            logging.info(f"Auto-correcting animal type AND pixel ratio to: {detected_type}")
-            self.set_animal_type(detected_type, update_pixel_ratio=True)
+        if final_box is None:
+            return None
 
-        # 5. Check if the final selected box passes the minimum size threshold (noise reduction)
-        if final_box is not None:
-            x1, y1, x2, y2, conf = final_box
-            h, w = image_bgr.shape[:2]
-            if (x2 - x1) * (y2 - y1) < (w * h * 0.03):
-                return None
-            return final_box
+        # ── Step 2: Group-based correction decision ───────────────────────────
+        detected_group = self.COCO_GROUPS.get(final_cls)
+        user_group     = self.ANIMAL_GROUP.get(self.animal_type)
 
-        return None
+        if detected_group and user_group:
+            if detected_group == user_group:
+                # SAME body-plan group: trust the user's button selection.
+                # YOLO confirms there's an animal of the right scale in frame.
+                # Only update pixel ratio if the user's type default differs
+                # significantly from the detected class default (e.g. pig
+                # vs dairy_cow have different pixel ratios even though both
+                # appear as COCO class 19).
+                logging.info(
+                    f"YOLO class {final_cls} ({detected_group}) matches user '"
+                    f"{self.animal_type}' group — keeping user selection."
+                )
+                # No animal_type change, no pixel_ratio reset needed.
+
+            else:
+                # DIFFERENT body-plan group: definitive mismatch — correct both
+                # animal type AND pixel ratio.
+                corrected_type = self.COCO_CLASS_DEFAULT.get(final_cls, "dairy_cow")
+                logging.info(
+                    f"Cross-group mismatch: user='{self.animal_type}' ({user_group}), "
+                    f"YOLO class {final_cls} ({detected_group}) → correcting to '{corrected_type}'"
+                )
+                self.set_animal_type(corrected_type, update_pixel_ratio=True)
+        else:
+            logging.warning(f"Unknown group for detected class {final_cls} or animal '{self.animal_type}'")
+
+        # ── Step 3: Minimum size threshold (noise/false-positive filter) ──────
+        x1, y1, x2, y2, conf = final_box
+        h, w = image_bgr.shape[:2]
+        if (x2 - x1) * (y2 - y1) < (w * h * 0.03):
+            logging.info("Detected box too small — likely a false positive, discarding.")
+            return None
+
+        return final_box
 
     def _fallback_contour_detection(self, image_bgr: np.ndarray) -> Optional[Tuple[int, int, int, int]]:
         height, width = image_bgr.shape[:2]
