@@ -250,7 +250,13 @@ def debug_gemini() -> Response:
     except Exception as e:
         models_error = f"{type(e).__name__}: {str(e)}"
 
-    # Also perform a minimal test query
+    # Text-only test (no image) - avoids 400 errors from strict image validators on newer models
+    payload_text_only = {
+        'contents': [{'parts': [{'text': 'Respond with only the word: ok'}]}],
+        'generationConfig': {'maxOutputTokens': 5}
+    }
+
+    # Image test payload - for models that support vision
     pixel_jpg_b64 = (
         '/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8U'
         'HRofHh0aHBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/2wBDAQkJCQwLDBgN'
@@ -259,8 +265,7 @@ def debug_gemini() -> Response:
         'BAMAAAAAAAAAAAAAAQIDBAUREiExQf/EABQBAQAAAAAAAAAAAAAAAAAAAAD/xAAUEQEAAAAA'
         'AAAAAAAAAAAAAP/aAAwDAQACEQMRAD8Apuz1ma4rRWnVJJXjVVZiWYgAAckkn3oA/9k='
     )
-
-    payload = {
+    payload_vision = {
         'contents': [{'parts': [
             {'inline_data': {'mime_type': 'image/jpeg', 'data': pixel_jpg_b64}},
             {'text': 'Return only this JSON: {"test": "ok"}'}
@@ -269,20 +274,27 @@ def debug_gemini() -> Response:
     }
 
     test_results = {}
-    for model_name in ['gemini-2.0-flash-lite', 'gemini-2.0-flash', 'gemini-2.5-flash', 'gemini-3.5-flash', 'gemini-3.1-flash-lite']:
+    for model_name in ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-2.0-flash-lite', 'gemini-3.5-flash', 'gemini-3.1-flash-lite']:
         url = f'https://generativelanguage.googleapis.com/v1/models/{model_name}:generateContent?key={api_key}'
-        try:
-            body = json.dumps(payload).encode('utf-8')
-            req = urllib.request.Request(url, data=body, method='POST')
-            req.add_header('Content-Type', 'application/json')
-            with urllib.request.urlopen(req, context=ctx, timeout=10) as r:
-                resp = json.loads(r.read().decode('utf-8'))
-            text = resp.get('candidates', [{}])[0].get('content', {}).get('parts', [{}])[0].get('text', '').strip()
-            test_results[model_name] = {'status': 'SUCCESS', 'response': text}
-        except urllib.error.HTTPError as e:
-            test_results[model_name] = {'status': f'HTTP_ERROR_{e.code}', 'error': e.read().decode('utf-8', errors='replace')[:400]}
-        except Exception as e:
-            test_results[model_name] = {'status': 'EXCEPTION', 'error': f'{type(e).__name__}: {str(e)}'}
+        # Try text-only first to check quota; then vision
+        for label, payload in [('text_test', payload_text_only), ('vision_test', payload_vision)]:
+            try:
+                body = json.dumps(payload).encode('utf-8')
+                req = urllib.request.Request(url, data=body, method='POST')
+                req.add_header('Content-Type', 'application/json')
+                with urllib.request.urlopen(req, context=ctx, timeout=10) as r:
+                    resp = json.loads(r.read().decode('utf-8'))
+                text = resp.get('candidates', [{}])[0].get('content', {}).get('parts', [{}])[0].get('text', '').strip()
+                test_results[model_name] = {'status': 'SUCCESS', 'test': label, 'response': text}
+                break  # stop once one succeeds
+            except urllib.error.HTTPError as e:
+                err_body = e.read().decode('utf-8', errors='replace')[:300]
+                test_results[model_name] = {'status': f'HTTP_ERROR_{e.code}', 'test': label, 'error': err_body}
+                if e.code == 429:
+                    break  # quota exhausted, no point testing vision
+            except Exception as e:
+                test_results[model_name] = {'status': 'EXCEPTION', 'test': label, 'error': f'{type(e).__name__}: {str(e)}'}
+                break
 
     return jsonify({
         'gemini_key_set': True,
