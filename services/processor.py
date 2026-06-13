@@ -254,8 +254,8 @@ class AnimalProcessor:
             }
 
             url = (
-                "https://generativelanguage.googleapis.com/v1beta/models/"
-                f"gemini-1.5-flash:generateContent?key={api_key}"
+                "https://generativelanguage.googleapis.com/v1/models/"
+                f"gemini-2.0-flash-lite:generateContent?key={api_key}"
             )
             req_body = json.dumps(payload).encode("utf-8")
             req = urllib.request.Request(url, data=req_body, method="POST")
@@ -445,7 +445,7 @@ class AnimalProcessor:
         ai_attribution = {
             "detection_model":      "YOLOv8n (Ultralytics)",
             "classification_model": "CLIP ViT-B/32 (OpenAI)",
-            "enrichment_model":     "Google Gemini 1.5 Flash" if gemini_used else None,
+            "enrichment_model":     "Google Gemini 2.0 Flash Lite" if gemini_used else None,
             "weight_formula":       "Schoorl Girth Formula (agricultural standard)",
             "bcs_correction":       (
                 f"BCS adjustment: {body_condition} (x{bcs_factor})"

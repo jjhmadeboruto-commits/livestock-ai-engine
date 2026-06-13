@@ -256,8 +256,8 @@ def debug_gemini() -> Response:
     }
 
     url = (
-        'https://generativelanguage.googleapis.com/v1beta/models/'
-        f'gemini-1.5-flash:generateContent?key={api_key}'
+        'https://generativelanguage.googleapis.com/v1/models/'
+        f'gemini-2.0-flash-lite:generateContent?key={api_key}'
     )
     try:
         body = json.dumps(payload).encode('utf-8')
@@ -519,7 +519,7 @@ def health_check() -> Response:
         'ai_models': {
             'detection': 'YOLOv8n (Ultralytics)',
             'classification': 'CLIP ViT-B/32 (OpenAI)',
-            'enrichment': 'Google Gemini 1.5 Flash' if gemini_configured else 'Not configured',
+            'enrichment': 'Google Gemini 2.0 Flash Lite' if gemini_configured else 'Not configured',
         }
     }), 200
 
@@ -660,7 +660,7 @@ def get_guidelines() -> Response:
                 'step1': 'YOLOv8n detects bounding box (WHERE the animal is)',
                 'step2': 'CLIP ViT-B/32 classifies species (WHAT the animal is)',
                 'step3': 'Schoorl Girth Formula converts pixels → estimated weight',
-                'step4': 'Google Gemini 1.5 Flash enriches with breed, body condition score, and health notes',
+                'step4': 'Google Gemini 2.0 Flash Lite enriches with breed, body condition score, and health notes',
                 'step5': 'BCS correction factor adjusts weight (thin animals weigh less than their frame suggests)',
                 'step6': 'Hard species cap ensures no biologically impossible weight is returned',
             }
