@@ -224,6 +224,75 @@ def debug_mediapipe() -> Response:
     }), 200
 
 
+@app.route('/api/debug-gemini', methods=['GET'])
+def debug_gemini() -> Response:
+    """Test Gemini REST API connectivity and key validity directly."""
+    import os, json, urllib.request, urllib.error, ssl, base64, traceback
+
+    api_key = os.environ.get('GEMINI_API_KEY', '').strip()
+    if not api_key:
+        return jsonify({
+            'gemini_key_set': False,
+            'status': 'GEMINI_API_KEY is not set in Space Secrets.',
+            'fix': 'Go to HF Space Settings -> Variables and Secrets -> add GEMINI_API_KEY'
+        }), 200
+
+    # Send a tiny 1x1 white pixel as a minimal test image
+    pixel_jpg_b64 = (
+        '/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8U'
+        'HRofHh0aHBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/2wBDAQkJCQwLDBgN'
+        'DRgyIRwhMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIy'
+        'MjL/wAARCAABAAEDASIAAhEBAxEB/8QAFgABAQEAAAAAAAAAAAAAAAAABgUE/8QAIhAAAgIB'
+        'BAMAAAAAAAAAAAAAAQIDBAUREiExQf/EABQBAQAAAAAAAAAAAAAAAAAAAAD/xAAUEQEAAAAA'
+        'AAAAAAAAAAAAAP/aAAwDAQACEQMRAD8Apuz1ma4rRWnVJJXjVVZiWYgAAckkn3oA/9k='
+    )
+
+    payload = {
+        'contents': [{'parts': [
+            {'inline_data': {'mime_type': 'image/jpeg', 'data': pixel_jpg_b64}},
+            {'text': 'Return only this JSON: {"test": "ok", "model": "gemini-1.5-flash"}'}
+        ]}],
+        'generationConfig': {'maxOutputTokens': 50}
+    }
+
+    url = (
+        'https://generativelanguage.googleapis.com/v1beta/models/'
+        f'gemini-1.5-flash:generateContent?key={api_key}'
+    )
+    try:
+        body = json.dumps(payload).encode('utf-8')
+        req = urllib.request.Request(url, data=body, method='POST')
+        req.add_header('Content-Type', 'application/json')
+        ctx = ssl.create_default_context()
+        with urllib.request.urlopen(req, context=ctx, timeout=20) as r:
+            resp = json.loads(r.read().decode('utf-8'))
+        text = resp.get('candidates', [{}])[0].get('content', {}).get('parts', [{}])[0].get('text', '')
+        return jsonify({
+            'gemini_key_set': True,
+            'status': 'SUCCESS',
+            'gemini_response': text,
+            'key_prefix': api_key[:8] + '...',
+        }), 200
+    except urllib.error.HTTPError as e:
+        err = e.read().decode('utf-8', errors='replace')
+        return jsonify({
+            'gemini_key_set': True,
+            'status': f'HTTP_ERROR_{e.code}',
+            'error': err[:500],
+            'key_prefix': api_key[:8] + '...',
+        }), 200
+    except Exception as e:
+        return jsonify({
+            'gemini_key_set': True,
+            'status': 'EXCEPTION',
+            'error': f'{type(e).__name__}: {str(e)}',
+            'traceback': traceback.format_exc()[-800:],
+            'key_prefix': api_key[:8] + '...',
+        }), 200
+
+
+
+
 @app.route('/api/estimate-weight', methods=['POST', 'OPTIONS'])
 def estimate_weight() -> Response:
     if request.method == 'OPTIONS':
