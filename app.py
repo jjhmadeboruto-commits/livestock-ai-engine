@@ -226,8 +226,8 @@ def debug_mediapipe() -> Response:
 
 @app.route('/api/debug-gemini', methods=['GET'])
 def debug_gemini() -> Response:
-    """Test Gemini REST API connectivity and key validity directly."""
-    import os, json, urllib.request, urllib.error, ssl, base64, traceback
+    """Test Gemini REST API connectivity, list models, and verify key validity directly."""
+    import os, json, urllib.request, urllib.error, ssl, traceback
 
     api_key = os.environ.get('GEMINI_API_KEY', '').strip()
     if not api_key:
@@ -237,7 +237,20 @@ def debug_gemini() -> Response:
             'fix': 'Go to HF Space Settings -> Variables and Secrets -> add GEMINI_API_KEY'
         }), 200
 
-    # Send a tiny 1x1 white pixel as a minimal test image
+    models_url = f'https://generativelanguage.googleapis.com/v1/models?key={api_key}'
+    models_data = None
+    models_error = None
+
+    try:
+        ctx = ssl.create_default_context()
+        with urllib.request.urlopen(models_url, context=ctx, timeout=20) as r:
+            models_data = json.loads(r.read().decode('utf-8'))
+    except urllib.error.HTTPError as e:
+        models_error = f"HTTP_{e.code}: {e.read().decode('utf-8', errors='replace')[:400]}"
+    except Exception as e:
+        models_error = f"{type(e).__name__}: {str(e)}"
+
+    # Also perform a minimal test query
     pixel_jpg_b64 = (
         '/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8U'
         'HRofHh0aHBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/2wBDAQkJCQwLDBgN'
@@ -250,45 +263,35 @@ def debug_gemini() -> Response:
     payload = {
         'contents': [{'parts': [
             {'inline_data': {'mime_type': 'image/jpeg', 'data': pixel_jpg_b64}},
-            {'text': 'Return only this JSON: {"test": "ok", "model": "gemini-1.5-flash"}'}
+            {'text': 'Return only this JSON: {"test": "ok"}'}
         ]}],
         'generationConfig': {'maxOutputTokens': 50}
     }
 
-    url = (
-        'https://generativelanguage.googleapis.com/v1/models/'
-        f'gemini-2.0-flash-lite:generateContent?key={api_key}'
-    )
-    try:
-        body = json.dumps(payload).encode('utf-8')
-        req = urllib.request.Request(url, data=body, method='POST')
-        req.add_header('Content-Type', 'application/json')
-        ctx = ssl.create_default_context()
-        with urllib.request.urlopen(req, context=ctx, timeout=20) as r:
-            resp = json.loads(r.read().decode('utf-8'))
-        text = resp.get('candidates', [{}])[0].get('content', {}).get('parts', [{}])[0].get('text', '')
-        return jsonify({
-            'gemini_key_set': True,
-            'status': 'SUCCESS',
-            'gemini_response': text,
-            'key_prefix': api_key[:8] + '...',
-        }), 200
-    except urllib.error.HTTPError as e:
-        err = e.read().decode('utf-8', errors='replace')
-        return jsonify({
-            'gemini_key_set': True,
-            'status': f'HTTP_ERROR_{e.code}',
-            'error': err[:500],
-            'key_prefix': api_key[:8] + '...',
-        }), 200
-    except Exception as e:
-        return jsonify({
-            'gemini_key_set': True,
-            'status': 'EXCEPTION',
-            'error': f'{type(e).__name__}: {str(e)}',
-            'traceback': traceback.format_exc()[-800:],
-            'key_prefix': api_key[:8] + '...',
-        }), 200
+    test_results = {}
+    for model_name in ['gemini-2.0-flash-lite', 'gemini-1.5-flash', 'gemini-1.5-flash-8b']:
+        url = f'https://generativelanguage.googleapis.com/v1/models/{model_name}:generateContent?key={api_key}'
+        try:
+            body = json.dumps(payload).encode('utf-8')
+            req = urllib.request.Request(url, data=body, method='POST')
+            req.add_header('Content-Type', 'application/json')
+            with urllib.request.urlopen(req, context=ctx, timeout=10) as r:
+                resp = json.loads(r.read().decode('utf-8'))
+            text = resp.get('candidates', [{}])[0].get('content', {}).get('parts', [{}])[0].get('text', '').strip()
+            test_results[model_name] = {'status': 'SUCCESS', 'response': text}
+        except urllib.error.HTTPError as e:
+            test_results[model_name] = {'status': f'HTTP_ERROR_{e.code}', 'error': e.read().decode('utf-8', errors='replace')[:400]}
+        except Exception as e:
+            test_results[model_name] = {'status': 'EXCEPTION', 'error': f'{type(e).__name__}: {str(e)}'}
+
+    return jsonify({
+        'gemini_key_set': True,
+        'key_prefix': api_key[:8] + '...',
+        'models_list': models_data,
+        'models_error': models_error,
+        'test_results': test_results
+    }), 200
+
 
 
 
