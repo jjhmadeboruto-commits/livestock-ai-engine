@@ -269,7 +269,7 @@ def debug_gemini() -> Response:
     }
 
     test_results = {}
-    for model_name in ['gemini-2.0-flash-lite', 'gemini-1.5-flash', 'gemini-1.5-flash-8b']:
+    for model_name in ['gemini-2.0-flash-lite', 'gemini-2.0-flash', 'gemini-2.5-flash', 'gemini-3.5-flash', 'gemini-3.1-flash-lite']:
         url = f'https://generativelanguage.googleapis.com/v1/models/{model_name}:generateContent?key={api_key}'
         try:
             body = json.dumps(payload).encode('utf-8')
