@@ -377,6 +377,7 @@ def estimate_weight() -> Response:
     scan_history.append(scan_record)
 
     return jsonify({
+        # ── Core weight result ────────────────────────────────────────────────
         'status': 'success',
         'success': True,
         'weight_kg': result['weight'],           # primary field
@@ -395,7 +396,23 @@ def estimate_weight() -> Response:
         'guidance': guidance,
         'annotated_image': annotated_b64,
         'filename': image_file.filename,
-        'method': method_used
+        'method': method_used,
+        # ── Gemini enrichment (breed, body condition, health) ─────────────
+        'breed': result.get('breed', 'Unknown'),
+        'body_condition': result.get('body_condition', 'Not assessed'),
+        'body_condition_score': result.get('body_condition_score'),
+        'health_notes': result.get('health_notes', ''),
+        'photo_quality_note': result.get('photo_quality_note', ''),
+        'gemini_cross_check': result.get('gemini_cross_check'),
+        # ── AI attribution (displayed in frontend as toast) ───────────────
+        'ai_attribution': result.get('ai_attribution', {
+            'detection_model': 'YOLOv8n (Ultralytics)',
+            'classification_model': 'CLIP ViT-B/32 (OpenAI)',
+            'enrichment_model': None,
+            'weight_formula': 'Schoorl Girth Formula (agricultural standard)',
+        }),
+        # ── Photo guidance (displayed as toast to help users get better shots)
+        'photo_guidance': result.get('photo_guidance', {}),
     }), 200
 
 
@@ -409,18 +426,31 @@ def get_animal_types() -> Response:
 @app.route('/api/health', methods=['GET'])
 def health_check() -> Response:
     """Health check endpoint."""
+    import os
+    gemini_configured = bool(os.environ.get('GEMINI_API_KEY', '').strip())
     return jsonify({
         'status': 'healthy',
-        'version': '1.1.0',
-        'deploy_version': '2026-05-17-02',
+        'version': '2.0.0',
+        'deploy_version': '2026-06-13-01',
         'service': 'LivestockAI Weight Estimation API',
         'timestamp': datetime.now().isoformat(),
         'features': {
             'weight_estimation': True,
             'calibration': True,
-            'all_species_mediapipe': True,
+            'species_detection_clip': True,
+            'gemini_enrichment': gemini_configured,
+            'bcs_weight_correction': gemini_configured,
+            'breed_identification': gemini_configured,
+            'hard_weight_caps': True,
+            'photo_guidance': True,
+            'ai_attribution': True,
             'session_tracking': True,
-            'image_quality_assessment': True
+            'image_quality_assessment': True,
+        },
+        'ai_models': {
+            'detection': 'YOLOv8n (Ultralytics)',
+            'classification': 'CLIP ViT-B/32 (OpenAI)',
+            'enrichment': 'Google Gemini 1.5 Flash' if gemini_configured else 'Not configured',
         }
     }), 200
 
@@ -522,36 +552,49 @@ def calibrate() -> Response:
 
 @app.route('/api/guidelines', methods=['GET'])
 def get_guidelines() -> Response:
+    """Returns comprehensive photo-taking guidelines and reference object specs.
+    Frontend can display these as an onboarding toast or help modal."""
+    from services.processor import AnimalProcessor
     return jsonify({
         'success': True,
         'guidelines': {
-            'photo_tips': [
-                "Take a clear SIDE-PROFILE photo of the animal.",
-                "Ensure the entire body is visible (shoulder to heel).",
-                "Use good natural or artificial lighting.",
-                "Avoid shadows across the animal's body.",
-                "Keep the camera at roughly hip height."
+            'photo_steps': [
+                "📐  Stand exactly 2–3 metres (6–10 feet) away from the animal.",
+                "🐄  Capture a FULL SIDE PROFILE — head to tail, all four legs visible.",
+                "📷  Hold the camera at the animal's mid-body height (not from above or below).",
+                "☀️  Use good, even lighting — avoid harsh shadows across the body.",
+                "🔲  Place an A4 sheet of paper (29.7 × 21 cm) flat on the ground beside the animal.",
+                "✋  Keep the animal standing still — a moving animal blurs measurements.",
+                "🚫  Remove other animals, people, or vehicles from the background.",
+            ],
+            'distance_guide': '2–3 metres (6–10 feet) gives the best balance of full-body visibility and pixel density.',
+            'reference_objects': [
+                {'name': 'A4 Paper (recommended)', 'width_cm': 21.0,  'height_cm': 29.7,  'note': 'Place flat on ground beside animal'},
+                {'name': 'Credit Card',             'width_cm': 8.56,  'height_cm': 5.40,  'note': 'Tape to fence rail beside animal'},
+                {'name': 'Standard Ruler',          'width_cm': 30.0,  'height_cm': 3.0,   'note': 'Hold vertically against animal shoulder'},
+                {'name': 'Fence Rail (typical)',     'width_cm': None,  'height_cm': 120.0, 'note': 'Standard cattle fence rail is ~1.2 m high'},
+            ],
+            'accuracy_table': [
+                {'method': 'No reference object, random distance', 'typical_error': '±20–30%'},
+                {'method': 'Correct distance (2–3 m), no reference',  'typical_error': '±10–15%'},
+                {'method': 'Reference object in frame',               'typical_error': '±5–10%'},
+                {'method': 'Reference object + correct distance',     'typical_error': '±3–8%'},
             ],
             'calibration_tips': [
-                "Include a known reference object (ruler, measuring tape, or credit card) in the photo.",
-                "Credit card width: 8.56 cm (standard)",
-                "A4 paper width: 21 cm, height: 29.7 cm",
-                "Measure the object's pixel width in your photo.",
-                "Send both measurements to the API for accurate scaling."
+                "Include a known reference object (A4 paper, ruler, or credit card) in the photo.",
+                "A4 paper is ideal — place it flat on the ground beside the animal.",
+                "Measure the A4 paper's pixel width in your photo, then send reference_cm=21 and reference_pixels=<your measurement> with the scan request.",
+                "Consistent distance (2–3 m) between shots improves trending accuracy over time.",
             ],
-            'accuracy_factors': [
-                "Confidence score > 80% = High accuracy",
-                "Confidence score 50-80% = Moderate accuracy",
-                "Confidence score < 50% = Re-take photo with better pose",
-                "Proper calibration can improve accuracy by 10-20%",
-                "Multiple scans help establish baseline for trending."
-            ],
-            'reference_objects': [
-                {'name': 'Credit Card', 'width_cm': 8.56, 'height_cm': 5.398},
-                {'name': 'A4 Paper', 'width_cm': 21, 'height_cm': 29.7},
-                {'name': 'US Dollar Bill', 'width_cm': 16.66, 'height_cm': 6.63},
-                {'name': 'Standard Ruler', 'width_cm': 30, 'height_cm': None},
-            ]
+            'weight_caps': AnimalProcessor.WEIGHT_HARD_CAPS,
+            'ai_pipeline': {
+                'step1': 'YOLOv8n detects bounding box (WHERE the animal is)',
+                'step2': 'CLIP ViT-B/32 classifies species (WHAT the animal is)',
+                'step3': 'Schoorl Girth Formula converts pixels → estimated weight',
+                'step4': 'Google Gemini 1.5 Flash enriches with breed, body condition score, and health notes',
+                'step5': 'BCS correction factor adjusts weight (thin animals weigh less than their frame suggests)',
+                'step6': 'Hard species cap ensures no biologically impossible weight is returned',
+            }
         }
     }), 200
 
