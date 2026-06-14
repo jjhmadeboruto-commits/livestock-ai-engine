@@ -481,6 +481,7 @@ def debug_processor_gate_and_enrich() -> Response:
 
     gate_payload = None
     gate_raw_text = None
+    gate_full_response = None
     gate_error = None
     try:
         success, buf = cv2.imencode(".jpg", image_bgr, [cv2.IMWRITE_JPEG_QUALITY, 80])
@@ -514,6 +515,7 @@ def debug_processor_gate_and_enrich() -> Response:
             }
             gate_payload = payload
             resp = processor._call_gemini_api(payload, timeout=20)
+            gate_full_response = resp
             if resp:
                 gate_raw_text = resp["candidates"][0]["content"]["parts"][0]["text"].strip()
             else:
@@ -524,6 +526,7 @@ def debug_processor_gate_and_enrich() -> Response:
     # 2. Test enrich prompt
     enrich_payload = None
     enrich_raw_text = None
+    enrich_full_response = None
     enrich_error = None
     try:
         success, buf = cv2.imencode(".jpg", image_bgr, [cv2.IMWRITE_JPEG_QUALITY, 85])
@@ -575,6 +578,7 @@ def debug_processor_gate_and_enrich() -> Response:
             }
             enrich_payload = payload
             resp = processor._call_gemini_api(payload, timeout=30)
+            enrich_full_response = resp
             if resp:
                 enrich_raw_text = resp["candidates"][0]["content"]["parts"][0]["text"].strip()
             else:
@@ -585,8 +589,10 @@ def debug_processor_gate_and_enrich() -> Response:
     return jsonify({
         'gate_error': gate_error,
         'gate_raw_text': gate_raw_text,
+        'gate_full_response': gate_full_response,
         'enrich_error': enrich_error,
-        'enrich_raw_text': enrich_raw_text
+        'enrich_raw_text': enrich_raw_text,
+        'enrich_full_response': enrich_full_response
     }), 200
 
 
