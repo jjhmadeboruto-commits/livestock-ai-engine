@@ -14,14 +14,19 @@ from typing import Any, Dict, Optional, Tuple
 class AnimalProcessor:
     """
     Livestock weight estimation using YOLOv8 bounding boxes + CLIP species
-    classification + Google Gemini 1.5 Flash enrichment.
+    classification + Google Gemini 2.5 Flash enrichment.
 
-    v2.0 additions:
-      * Direct REST call to Gemini 1.5 Flash (no SDK needed, pure stdlib)
-      * Body Condition Score (BCS) weight correction factor
-      * Hard species weight caps (cattle max 800 kg, etc.)
-      * Photo-taking guidance returned in every response
-      * AI attribution in every result
+    v3.0 — Major improvements:
+      * Gemini acts as FIRST gatekeeper — rejects non-livestock images before
+        any weight estimation runs (no more phones/websites getting weights)
+      * Richer Gemini prompt: returns sex, estimated age, posture, activity,
+        visible health concerns, and a conversational narrative explanation
+      * Gemini weight dominates (80%) when geometric data is unreliable (small
+        bounding box, contour fallback, or small species like pigs/poultry)
+      * Detected species key properly returned so scan_record uses correct
+        animal type for history/species breakdown (not the user button label)
+      * Confidence-gated CLIP: mouse/rat/non-livestock -> hard reject
+      * Hard species weight caps still enforced as last safeguard
     """
 
     # ── Calibration constants ─────────────────────────────────────────────────
@@ -56,6 +61,9 @@ class AnimalProcessor:
         "excellent": 1.18,
         "unknown":   1.00,
     }
+
+    # Species where Gemini visual weight estimate dominates (geometry less reliable)
+    GEMINI_DOMINANT_SPECIES = {"pig", "poultry", "goat", "sheep"}
 
     YOLO_LIVESTOCK_CLASSES = {14, 17, 18, 19}
 
@@ -118,7 +126,8 @@ class AnimalProcessor:
         "goat":         ["a goat", "a billy goat", "a nanny goat", "a mountain goat"],
         "donkey":       ["a donkey", "a mule", "a burro", "a domestic donkey"],
         "poultry":      ["a chicken", "a hen", "a rooster", "a turkey", "a duck", "a poultry bird"],
-        "invalid":      ["a person", "a human", "a dog", "a cat", "a vehicle", "a building", "a car"],
+        "invalid":      ["a person", "a human", "a dog", "a cat", "a vehicle", "a building", "a car",
+                         "a phone", "a computer", "a mouse", "a rat", "a wild animal", "a website screenshot"],
     }
 
     _yolo_model = None
@@ -193,50 +202,45 @@ class AnimalProcessor:
                 self.__class__._clip_processor = False
 
     # ─────────────────────────────────────────────────────────────────────────
-    # Gemini Enrichment Layer (pure stdlib — no SDK dependency)
+    # Gemini Gatekeeper — First line of defence (is this even an animal?)
     # ─────────────────────────────────────────────────────────────────────────
 
-    def _gemini_enrich(self, image_bgr: np.ndarray) -> dict:
+    def _gemini_gate(self, image_bgr: np.ndarray) -> dict:
         """
-        Calls Google Gemini 1.5 Flash via direct REST API to enrich a scan with:
-          - breed, body_condition (thin/fair/good/excellent), body_condition_score,
-            health_notes, estimated_weight_range_kg, photo_quality_note.
+        Calls Gemini with a lightweight gatekeeper prompt BEFORE any weight
+        estimation. Returns a dict with:
+          - is_livestock: bool
+          - rejection_reason: str (if not livestock)
+          - detected_species: str  (e.g. "pig", "cow", "dog", "phone")
+          - confidence: str ("high"/"medium"/"low")
 
-        Uses only stdlib (base64, urllib, json, ssl) — zero extra packages.
-        GEMINI_API_KEY must be set as a Hugging Face Space Secret.
-        Returns {} gracefully on any failure so the main pipeline always continues.
+        Returns {"is_livestock": True, "detected_species": "unknown"} on any
+        API failure so that the pipeline does NOT silently break when Gemini
+        is unavailable.
         """
         api_key = os.environ.get("GEMINI_API_KEY", "").strip()
         if not api_key:
-            logging.info("GEMINI_API_KEY not set — skipping Gemini enrichment.")
-            return {}
+            return {"is_livestock": True, "detected_species": "unknown"}
 
         try:
-            # Encode crop as JPEG base64 using cv2 only (PIL not required here)
-            success, buf = cv2.imencode(".jpg", image_bgr, [cv2.IMWRITE_JPEG_QUALITY, 85])
+            success, buf = cv2.imencode(".jpg", image_bgr, [cv2.IMWRITE_JPEG_QUALITY, 80])
             if not success:
-                logging.warning("Gemini: cv2.imencode failed — skipping.")
-                return {}
+                return {"is_livestock": True, "detected_species": "unknown"}
             img_b64 = base64.b64encode(buf.tobytes()).decode("utf-8")
 
             prompt = (
-                "You are a professional livestock veterinarian and body-condition scorer.\n"
-                "Analyze this livestock image and return ONLY a valid JSON object with these exact keys:\n\n"
+                "You are a livestock detection gatekeeper for a farming application.\n"
+                "Look at this image and determine if it contains a livestock animal.\n\n"
+                "Supported livestock species: cattle (cow/bull/calf), pig, goat, sheep, donkey, poultry (chicken/duck/turkey).\n\n"
+                "Return ONLY a valid JSON object with exactly these keys:\n"
                 "{\n"
-                '  "breed": "<specific breed name or Mixed/Unknown>",\n'
-                '  "body_condition": "<exactly one of: thin, fair, good, excellent>",\n'
-                '  "body_condition_score": <integer 1 to 5>,\n'
-                '  "health_notes": "<one short sentence about visible health indicators>",\n'
-                '  "estimated_weight_range_kg": [<min_integer>, <max_integer>],\n'
-                '  "photo_quality_note": "<one short sentence on photo quality and positioning>"\n'
+                "  \"is_livestock\": <true or false>,\n"
+                "  \"detected_species\": \"<what you actually see, e.g. pig, cow, dog, cat, mouse, phone, person, website, gadget>\",\n"
+                "  \"confidence\": \"<high, medium, or low>\",\n"
+                "  \"rejection_reason\": \"<if is_livestock is false: one clear sentence explaining what is in the image and why it cannot be weighed>\"\n"
                 "}\n\n"
-                "Body condition scoring guide:\n"
-                "  1 = Emaciated (thin)\n"
-                "  2 = Very thin (thin)\n"
-                "  3 = Moderate (fair)\n"
-                "  4 = Good (good)\n"
-                "  5 = Excellent/Obese (excellent)\n\n"
-                "Be specific about the breed. Return ONLY the JSON object, no other text."
+                "Be STRICT: a mouse, rat, dog, cat, wild animal, person, screenshot, website, or any non-livestock image must return is_livestock: false.\n"
+                "Return ONLY the JSON object. No other text."
             )
 
             payload = {
@@ -248,8 +252,8 @@ class AnimalProcessor:
                 }],
                 "generationConfig": {
                     "response_mime_type": "application/json",
-                    "temperature": 0.1,
-                    "maxOutputTokens": 300
+                    "temperature": 0.0,
+                    "maxOutputTokens": 150
                 }
             }
 
@@ -262,13 +266,115 @@ class AnimalProcessor:
             req.add_header("Content-Type", "application/json")
 
             ctx = ssl.create_default_context()
-            with urllib.request.urlopen(req, context=ctx, timeout=25) as resp:
+            with urllib.request.urlopen(req, context=ctx, timeout=20) as resp:
                 response = json.loads(resp.read().decode("utf-8"))
 
-            # Extract the generated text
+            raw = response["candidates"][0]["content"]["parts"][0]["text"].strip()
+            if raw.startswith("```"):
+                parts = raw.split("```")
+                raw = parts[1] if len(parts) > 1 else raw
+                if raw.startswith("json"):
+                    raw = raw[4:]
+            raw = raw.strip()
+
+            gate = json.loads(raw)
+            logging.info(f"Gemini gate: is_livestock={gate.get('is_livestock')}, species={gate.get('detected_species')}, conf={gate.get('confidence')}")
+            return gate
+
+        except urllib.error.HTTPError as e:
+            err_body = e.read().decode("utf-8", errors="replace")
+            logging.warning(f"Gemini gate HTTP {e.code}: {err_body[:300]}")
+            return {"is_livestock": True, "detected_species": "unknown"}
+        except Exception as e:
+            logging.warning(f"Gemini gate failed ({type(e).__name__}): {e}")
+            return {"is_livestock": True, "detected_species": "unknown"}
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # Gemini Enrichment Layer — Rich breed / BCS / health / weight narrative
+    # ─────────────────────────────────────────────────────────────────────────
+
+    def _gemini_enrich(self, image_bgr: np.ndarray, requested_species: str = "unknown") -> dict:
+        """
+        Calls Google Gemini 2.5 Flash via direct REST API to enrich a scan with:
+          - breed, sex, estimated_age_months, body_condition, body_condition_score,
+            posture, activity_level, visible_health_concerns, estimated_weight_range_kg,
+            photo_quality_note, gemini_explanation (conversational narrative for the user).
+
+        Returns {} gracefully on any failure so the main pipeline always continues.
+        """
+        api_key = os.environ.get("GEMINI_API_KEY", "").strip()
+        if not api_key:
+            logging.info("GEMINI_API_KEY not set — skipping Gemini enrichment.")
+            return {}
+
+        try:
+            success, buf = cv2.imencode(".jpg", image_bgr, [cv2.IMWRITE_JPEG_QUALITY, 85])
+            if not success:
+                logging.warning("Gemini: cv2.imencode failed — skipping.")
+                return {}
+            img_b64 = base64.b64encode(buf.tobytes()).decode("utf-8")
+
+            prompt = (
+                f"You are a professional livestock veterinarian and expert body-condition scorer.\n"
+                f"The farmer has submitted a photo they believe shows a {requested_species}.\n"
+                f"Analyze this livestock image carefully and return ONLY a valid JSON object with these exact keys:\n\n"
+                "{\n"
+                "  \"breed\": \"<specific breed name, e.g. Large Black Pig, Duroc, Berkshire, Holstein, Boer Goat, or Mixed/Unknown>\",\n"
+                "  \"sex\": \"<male, female, or unknown>\",\n"
+                "  \"estimated_age_months\": <integer — your best estimate of the animal's age in months>,\n"
+                "  \"body_condition\": \"<exactly one of: thin, fair, good, excellent>\",\n"
+                "  \"body_condition_score\": <integer 1 to 5>,\n"
+                "  \"posture\": \"<e.g. standing alert, grazing, resting, walking>\",\n"
+                "  \"activity_level\": \"<calm, moderate, or active>\",\n"
+                "  \"visible_health_concerns\": \"<any visible issues like wounds, lameness, distended belly, mud coverage, or None observed>\",\n"
+                "  \"estimated_weight_range_kg\": [<min_integer>, <max_integer>],\n"
+                "  \"photo_quality_note\": \"<one short sentence on photo quality and positioning>\",\n"
+                "  \"gemini_explanation\": \"<A warm, clear, 3-5 sentence explanation written directly TO the farmer, in first person as Gemini. Start with what you visually observed about the animal. Explain WHY you estimated the weight you did — mentioning the breed, body condition, age, and any visual cues like belly size or muscle development. Mention what would make the estimate more accurate. End with a helpful farming insight.>\"\n"
+                "}\n\n"
+                "Body condition scoring guide:\n"
+                "  1 = Emaciated (thin)\n"
+                "  2 = Very thin (thin)\n"
+                "  3 = Moderate (fair)\n"
+                "  4 = Good (good)\n"
+                "  5 = Excellent/Obese (excellent)\n\n"
+                "Weight estimation guide:\n"
+                "  - Adult pigs typically weigh 80–250 kg. A large mature sow can be 180–300 kg.\n"
+                "  - Piglets (under 3 months) weigh 5–30 kg.\n"
+                "  - Cattle: dairy cows 400–700 kg, beef bulls 500–800 kg, calves 50–200 kg.\n"
+                "  - Goats: 20–90 kg. Sheep: 30–120 kg. Donkeys: 80–300 kg. Poultry: 0.5–8 kg.\n"
+                "  - NEVER estimate above biologically plausible maximums.\n\n"
+                "Be specific about the breed. Use your visual assessment of body size, muscle definition, and fat coverage.\n"
+                "Return ONLY the JSON object, no other text."
+            )
+
+            payload = {
+                "contents": [{
+                    "parts": [
+                        {"inline_data": {"mime_type": "image/jpeg", "data": img_b64}},
+                        {"text": prompt}
+                    ]
+                }],
+                "generationConfig": {
+                    "response_mime_type": "application/json",
+                    "temperature": 0.15,
+                    "maxOutputTokens": 600
+                }
+            }
+
+            url = (
+                "https://generativelanguage.googleapis.com/v1/models/"
+                f"gemini-2.5-flash:generateContent?key={api_key}"
+            )
+            req_body = json.dumps(payload).encode("utf-8")
+            req = urllib.request.Request(url, data=req_body, method="POST")
+            req.add_header("Content-Type", "application/json")
+
+            ctx = ssl.create_default_context()
+            with urllib.request.urlopen(req, context=ctx, timeout=30) as resp:
+                response = json.loads(resp.read().decode("utf-8"))
+
             raw = response["candidates"][0]["content"]["parts"][0]["text"].strip()
 
-            # Strip markdown code fences if Gemini wraps the JSON
             if raw.startswith("```"):
                 parts = raw.split("```")
                 raw = parts[1] if len(parts) > 1 else raw
@@ -278,6 +384,7 @@ class AnimalProcessor:
 
             data = json.loads(raw)
             logging.info(f"Gemini enrichment success: breed={data.get('breed')}, "
+                         f"sex={data.get('sex')}, age={data.get('estimated_age_months')}mo, "
                          f"condition={data.get('body_condition')}, "
                          f"range={data.get('estimated_weight_range_kg')}")
             return data
@@ -306,6 +413,25 @@ class AnimalProcessor:
 
         calibration          = self.LIVESTOCK_CALIBRATION[self.animal_type]
         target_coco_classes  = calibration["coco_classes"]
+
+        # ── Step 0: Gemini Gatekeeper — reject non-livestock FIRST ────────────
+        gate_result = self._gemini_gate(image_bgr)
+        if not gate_result.get("is_livestock", True):
+            detected_thing = gate_result.get("detected_species", "unknown object")
+            rejection_msg  = gate_result.get(
+                "rejection_reason",
+                f"No livestock animal detected. The image appears to contain: {detected_thing}. "
+                "Please upload a clear photo of a livestock animal (cattle, pig, goat, sheep, donkey, or poultry)."
+            )
+            return {
+                "weight": 0.0, "body_length": 0.0, "body_height": 0.0,
+                "estimated_girth": 0.0, "animal_type": "Invalid Target",
+                "confidence_score": 0.0, "annotated_image": image_bgr,
+                "expected_weight_range": [0, 0], "within_expected_range": False,
+                "method": "rejected",
+                "error_message": rejection_msg,
+                "detected_as": detected_thing,
+            }
 
         # ── Human detection + YOLO inference ──────────────────────────────────
         yolo_results = None
@@ -417,7 +543,7 @@ class AnimalProcessor:
         crop_x1 = max(0, x1)
         crop_x2 = min(image_bgr.shape[1], x2)
         crop_for_gemini = image_bgr[crop_y1:crop_y2, crop_x1:crop_x2]
-        gemini_data = self._gemini_enrich(crop_for_gemini)
+        gemini_data = self._gemini_enrich(crop_for_gemini, requested_species=self.animal_type)
 
         # ── Step 5: BCS Weight Correction ─────────────────────────────────────
         body_condition_raw = (gemini_data.get("body_condition") or "unknown").lower().strip()
@@ -425,14 +551,30 @@ class AnimalProcessor:
         bcs_factor         = self.BCS_CORRECTION[body_condition]
         weight_kg          = weight_kg * bcs_factor
 
-        # ── Step 6: Gemini weight cross-check blend ────────────────────────────
+        # ── Step 6: Gemini weight blend (species-aware weighting) ──────────────
         gemini_range = gemini_data.get("estimated_weight_range_kg")
         gemini_cross_check = None
+        gemini_used = bool(gemini_data)
+
         if gemini_range and isinstance(gemini_range, (list, tuple)) and len(gemini_range) == 2:
             g_min, g_max = float(gemini_range[0]), float(gemini_range[1])
             gemini_mid   = (g_min + g_max) / 2.0
-            # 70% formula (geometry-based) + 30% Gemini midpoint (vision-based sanity check)
-            weight_kg    = weight_kg * 0.70 + gemini_mid * 0.30
+
+            # For species where geometry is unreliable (pigs, poultry, goats, sheep),
+            # Gemini's visual estimate is more trustworthy — use 80/20 in Gemini's favour.
+            # For large cattle where geometry works well, use 60/40.
+            is_contour = method_used == "contour_fallback"
+            bounding_box_area = box_width_pixels * box_height_pixels
+            img_area = float(image_bgr.shape[0] * image_bgr.shape[1])
+            box_coverage = bounding_box_area / max(1.0, img_area)
+
+            if self.animal_type in self.GEMINI_DOMINANT_SPECIES or is_contour or box_coverage < 0.10:
+                # Gemini 80%, geometry 20%
+                weight_kg = weight_kg * 0.20 + gemini_mid * 0.80
+            else:
+                # Geometry 60%, Gemini 40%
+                weight_kg = weight_kg * 0.60 + gemini_mid * 0.40
+
             gemini_cross_check = {"min": g_min, "max": g_max, "midpoint": round(gemini_mid, 1)}
 
         # ── Step 7: Hard species weight cap ───────────────────────────────────
@@ -441,17 +583,21 @@ class AnimalProcessor:
         weight_kg = max(min_floor, min(weight_kg, hard_cap))
 
         # ── AI attribution ─────────────────────────────────────────────────────
-        gemini_used    = bool(gemini_data)
         ai_attribution = {
             "detection_model":      "YOLOv8n (Ultralytics)",
             "classification_model": "CLIP ViT-B/32 (OpenAI)",
             "enrichment_model":     "Google Gemini 2.5 Flash" if gemini_used else None,
-            "weight_formula":       "Schoorl Girth Formula (agricultural standard)",
+            "weight_formula":       "Schoorl Girth Formula + Gemini Visual Intelligence",
             "bcs_correction":       (
                 f"BCS adjustment: {body_condition} (x{bcs_factor})"
                 if gemini_used else "No BCS correction (Gemini key not configured)"
             ),
             "gemini_cross_check": gemini_cross_check,
+            "weight_blend": (
+                "80% Gemini visual + 20% geometric (Gemini dominant for this species)"
+                if self.animal_type in self.GEMINI_DOMINANT_SPECIES and gemini_range
+                else "60% geometric + 40% Gemini visual cross-check"
+            ) if gemini_range else "Geometric formula only (Gemini weight range unavailable)",
         }
 
         # ── Biological range check ─────────────────────────────────────────────
@@ -465,12 +611,16 @@ class AnimalProcessor:
             if aspect_ratio < 1.1 or aspect_ratio > 2.2:
                 warning_message = "Unusual geometry detected. Please ensure the animal is standing broadside."
 
+        # Detected species key (internal, for scan_record bucketing)
+        detected_species_key = self.animal_type
+
         return {
             "weight":                 float(round(weight_kg, 2)),
             "body_length":            float(round(length_cm, 2)),
             "body_height":            float(round(height_cm, 2)),
             "estimated_girth":        float(round(girth_cm, 2)),
             "animal_type":            str(calibration["name"]),
+            "detected_species_key":   detected_species_key,   # internal key (pig, sheep, etc.)
             "confidence_score":       float(round(confidence_score, 3)),
             "annotated_image":        annotated_image,
             "expected_weight_range":  calibration.get("expected_range"),
@@ -480,10 +630,16 @@ class AnimalProcessor:
             "pixel_to_cm_ratio":      float(ratio),
             # Gemini enrichment
             "breed":                  gemini_data.get("breed", "Unknown"),
+            "sex":                    gemini_data.get("sex", "Unknown"),
+            "estimated_age_months":   gemini_data.get("estimated_age_months"),
+            "posture":                gemini_data.get("posture", ""),
+            "activity_level":         gemini_data.get("activity_level", ""),
+            "visible_health_concerns":gemini_data.get("visible_health_concerns", "None observed"),
             "body_condition":         body_condition if gemini_used else "Not assessed",
             "body_condition_score":   gemini_data.get("body_condition_score"),
-            "health_notes":           gemini_data.get("health_notes", ""),
+            "health_notes":           gemini_data.get("visible_health_concerns", ""),
             "photo_quality_note":     gemini_data.get("photo_quality_note", ""),
+            "gemini_explanation":     gemini_data.get("gemini_explanation", ""),
             "gemini_cross_check":     gemini_cross_check,
             # AI attribution
             "ai_attribution":         ai_attribution,
@@ -569,7 +725,8 @@ class AnimalProcessor:
             logging.info(f"CLIP scores: { {k: round(v,4) for k, v in cat_avg.items()} }")
             logging.info(f"CLIP best: '{best_cat}' @ {best_score:.4f}")
 
-            if best_score < 0.05:
+            # Higher confidence threshold to avoid misclassifying small animals as livestock
+            if best_score < 0.07:
                 return None
             if best_cat == "invalid":
                 return "invalid"

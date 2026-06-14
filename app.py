@@ -446,15 +446,26 @@ def estimate_weight() -> Response:
             )
         guidance.append("Check that the selected animal type matches the photo and review calibration.")
 
+    # Use the DETECTED species key (not the user-button label) so that
+    # a pig scanned on the 'Cattle' button records under 'pig', not 'cattle'.
+    detected_species_key = result.get('detected_species_key', animal_type)
+    detected_display_name = result['animal_type']  # human-readable (e.g. "Pig")
+
     scan_record = {
         'timestamp': datetime.now().isoformat(),
         'animal_name': animal_name,
-        'animal_type': result['animal_type'],
+        'animal_type': detected_display_name,          # display name for UI
+        'animal_type_key': detected_species_key,       # internal key for filtering
+        'requested_animal_type': animal_type,          # what the user selected
         'farm_name': farm_name,
         'weight': result['weight'],
         'body_length': result['body_length'],
         'body_height': result['body_height'],
         'confidence_score': result['confidence_score'],
+        'breed': result.get('breed', 'Unknown'),
+        'sex': result.get('sex', 'Unknown'),
+        'estimated_age_months': result.get('estimated_age_months'),
+        'body_condition': result.get('body_condition', 'Not assessed'),
         'within_expected_range': result.get('within_expected_range', True),
         'method': method_used
     }
@@ -471,7 +482,11 @@ def estimate_weight() -> Response:
         'body_height_cm': result['body_height'], # primary field
         'body_height': result['body_height'],    # legacy alias
         'estimated_girth': result['estimated_girth'],
-        'animal_type': result['animal_type'],
+        # ── Species info — detected (corrected) vs. requested ────────────
+        'animal_type': result['animal_type'],              # display name of DETECTED species
+        'detected_species_key': detected_species_key,      # internal key of DETECTED species
+        'requested_animal_type': animal_type,              # what the user originally selected
+        'species_corrected': detected_species_key != animal_type,  # true if AI corrected the species
         'confidence_score': result['confidence_score'],
         'pixel_to_cm_ratio': result.get('pixel_to_cm_ratio', processor.pixel_to_cm_ratio),
         'image_quality': quality_info,
@@ -481,19 +496,26 @@ def estimate_weight() -> Response:
         'annotated_image': annotated_b64,
         'filename': image_file.filename,
         'method': method_used,
-        # ── Gemini enrichment (breed, body condition, health) ─────────────
+        # ── Gemini enrichment — breed, body condition, detailed attributes ─
         'breed': result.get('breed', 'Unknown'),
+        'sex': result.get('sex', 'Unknown'),
+        'estimated_age_months': result.get('estimated_age_months'),
+        'posture': result.get('posture', ''),
+        'activity_level': result.get('activity_level', ''),
+        'visible_health_concerns': result.get('visible_health_concerns', 'None observed'),
         'body_condition': result.get('body_condition', 'Not assessed'),
         'body_condition_score': result.get('body_condition_score'),
         'health_notes': result.get('health_notes', ''),
         'photo_quality_note': result.get('photo_quality_note', ''),
         'gemini_cross_check': result.get('gemini_cross_check'),
+        # ── Gemini conversational explanation (show this to the user) ─────
+        'gemini_explanation': result.get('gemini_explanation', ''),
         # ── AI attribution (displayed in frontend as toast) ───────────────
         'ai_attribution': result.get('ai_attribution', {
             'detection_model': 'YOLOv8n (Ultralytics)',
             'classification_model': 'CLIP ViT-B/32 (OpenAI)',
             'enrichment_model': None,
-            'weight_formula': 'Schoorl Girth Formula (agricultural standard)',
+            'weight_formula': 'Schoorl Girth Formula + Gemini Visual Intelligence',
         }),
         # ── Photo guidance (displayed as toast to help users get better shots)
         'photo_guidance': result.get('photo_guidance', {}),
@@ -515,7 +537,7 @@ def health_check() -> Response:
     return jsonify({
         'status': 'healthy',
         'version': '2.0.0',
-        'deploy_version': '2026-06-13-01',
+        'deploy_version': '2026-06-14-03',
         'service': 'LivestockAI Weight Estimation API',
         'timestamp': datetime.now().isoformat(),
         'features': {
@@ -534,7 +556,7 @@ def health_check() -> Response:
         'ai_models': {
             'detection': 'YOLOv8n (Ultralytics)',
             'classification': 'CLIP ViT-B/32 (OpenAI)',
-            'enrichment': 'Google Gemini 2.0 Flash Lite' if gemini_configured else 'Not configured',
+            'enrichment': 'Google Gemini 2.5 Flash' if gemini_configured else 'Not configured',
         }
     }), 200
 
@@ -675,7 +697,7 @@ def get_guidelines() -> Response:
                 'step1': 'YOLOv8n detects bounding box (WHERE the animal is)',
                 'step2': 'CLIP ViT-B/32 classifies species (WHAT the animal is)',
                 'step3': 'Schoorl Girth Formula converts pixels → estimated weight',
-                'step4': 'Google Gemini 2.0 Flash Lite enriches with breed, body condition score, and health notes',
+                'step4': 'Google Gemini 2.5 Flash enriches with breed, body condition score, and health notes',
                 'step5': 'BCS correction factor adjusts weight (thin animals weigh less than their frame suggests)',
                 'step6': 'Hard species cap ensures no biologically impossible weight is returned',
             }
