@@ -245,14 +245,8 @@ class AnimalProcessor:
             except urllib.error.HTTPError as e:
                 err_body = e.read().decode("utf-8", errors="replace")
                 last_error = f"HTTP {e.code} for {model}: {err_body[:500]}"
-                if e.code == 429:
-                    logging.warning(f"Gemini model {model} rate limited/quota exceeded (429). Trying fallback...")
-                    continue
-                else:
-                    logging.error(f"Gemini model {model} failed with non-429 error: {last_error}")
-                    if e.code == 400 and "model" in err_body.lower():
-                        continue  # model-specific error, try next
-                    break
+                logging.warning(f"Gemini model {model} failed with HTTP {e.code}: {last_error}. Trying next fallback...")
+                continue
             except Exception as ex:
                 last_error = f"{type(ex).__name__} for {model}: {ex}"
                 logging.error(f"Gemini model {model} request failed: {last_error}")
