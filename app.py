@@ -312,21 +312,14 @@ def debug_vision_models() -> Response:
     if not api_key:
         return jsonify({'error': 'GEMINI_API_KEY not set'}), 500
         
-    img_path = 'pig_test.jpg'
-    if not os.path.exists(img_path):
-        # try fallback paths
-        current_file_path = os.path.abspath(__file__)
-        root_dir = os.path.dirname(current_file_path)
-        img_path = os.path.join(root_dir, 'pig_test.jpg')
-        if not os.path.exists(img_path):
-            return jsonify({'error': f'pig_test.jpg not found at {img_path}'}), 404
-            
+    img_url = "https://images.unsplash.com/photo-1570042225831-d98fa7577f1e?w=640" # public photo of a cow
     try:
-        with open(img_path, 'rb') as f:
-            img_bytes = f.read()
+        ctx_no_ssl = ssl._create_unverified_context()
+        with urllib.request.urlopen(img_url, context=ctx_no_ssl, timeout=15) as r:
+            img_bytes = r.read()
         img_b64 = base64.b64encode(img_bytes).decode('utf-8')
     except Exception as e:
-        return jsonify({'error': f'Failed to read pig_test.jpg: {e}'}), 500
+        return jsonify({'error': f'Failed to download test image from {img_url}: {e}'}), 500
         
     payload = {
         'contents': [{
