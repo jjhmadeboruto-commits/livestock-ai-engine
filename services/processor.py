@@ -251,14 +251,13 @@ class AnimalProcessor:
                     ]
                 }],
                 "generationConfig": {
-                    "responseMimeType": "application/json",
                     "temperature": 0.0,
                     "maxOutputTokens": 150
                 }
             }
 
             url = (
-                "https://generativelanguage.googleapis.com/v1/models/"
+                "https://generativelanguage.googleapis.com/v1beta/models/"
                 f"gemini-2.5-flash:generateContent?key={api_key}"
             )
             req_body = json.dumps(payload).encode("utf-8")
@@ -355,14 +354,13 @@ class AnimalProcessor:
                     ]
                 }],
                 "generationConfig": {
-                    "responseMimeType": "application/json",
                     "temperature": 0.15,
                     "maxOutputTokens": 600
                 }
             }
 
             url = (
-                "https://generativelanguage.googleapis.com/v1/models/"
+                "https://generativelanguage.googleapis.com/v1beta/models/"
                 f"gemini-2.5-flash:generateContent?key={api_key}"
             )
             req_body = json.dumps(payload).encode("utf-8")
@@ -777,14 +775,13 @@ class AnimalProcessor:
                     ]
                 }],
                 "generationConfig": {
-                    "responseMimeType": "application/json",
                     "temperature": 0.05,
                     "maxOutputTokens": 700
                 }
             }
 
             url = (
-                "https://generativelanguage.googleapis.com/v1/models/"
+                "https://generativelanguage.googleapis.com/v1beta/models/"
                 f"gemini-2.5-flash:generateContent?key={api_key}"
             )
             req_body = json.dumps(payload).encode("utf-8")

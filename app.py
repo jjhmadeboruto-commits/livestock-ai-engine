@@ -267,7 +267,7 @@ def debug_gemini() -> Response:
     )
     payload_vision = {
         'contents': [{'parts': [
-            {'inline_data': {'mime_type': 'image/jpeg', 'data': pixel_jpg_b64}},
+            {'inlineData': {'mimeType': 'image/jpeg', 'data': pixel_jpg_b64}},
             {'text': 'Return only this JSON: {"test": "ok"}'}
         ]}],
         'generationConfig': {'maxOutputTokens': 50}
@@ -275,7 +275,7 @@ def debug_gemini() -> Response:
 
     test_results = {}
     for model_name in ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-2.0-flash-lite', 'gemini-3.5-flash', 'gemini-3.1-flash-lite']:
-        url = f'https://generativelanguage.googleapis.com/v1/models/{model_name}:generateContent?key={api_key}'
+        url = f'https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}'
         for label, payload in [('text_test', payload_text_only), ('vision_test', payload_vision)]:
             key_name = f"{model_name}_{label}"
             try:
@@ -334,18 +334,17 @@ def debug_enrich() -> Response:
         payload = {
             "contents": [{
                 "parts": [
-                    {"inline_data": {"mime_type": "image/jpeg", "data": img_b64}},
+                    {"inlineData": {"mimeType": "image/jpeg", "data": img_b64}},
                     {"text": prompt}
                 ]
             }],
             "generationConfig": {
-                "response_mime_type": "application/json",
                 "temperature": 0.1,
                 "maxOutputTokens": 200
             }
         }
         
-        url = f"https://generativelanguage.googleapis.com/v1/models/gemini-2.5-flash:generateContent?key={api_key}"
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={api_key}"
         body = json.dumps(payload).encode("utf-8")
         req = urllib.request.Request(url, data=body, method="POST")
         req.add_header("Content-Type", "application/json")
@@ -850,8 +849,8 @@ def health_check() -> Response:
     gemini_configured = bool(os.environ.get('GEMINI_API_KEY', '').strip())
     return jsonify({
         'status': 'healthy',
-        'version': '3.0.0',
-        'deploy_version': '2026-06-14-04',
+        'version': '3.2.0',
+        'deploy_version': '2026-06-14-v1beta-fix',
         'service': 'LivestockAI Weight Estimation API',
         'timestamp': datetime.now().isoformat(),
         'features': {
