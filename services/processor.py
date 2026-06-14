@@ -246,12 +246,12 @@ class AnimalProcessor:
             payload = {
                 "contents": [{
                     "parts": [
-                        {"inline_data": {"mime_type": "image/jpeg", "data": img_b64}},
+                        {"inlineData": {"mimeType": "image/jpeg", "data": img_b64}},
                         {"text": prompt}
                     ]
                 }],
                 "generationConfig": {
-                    "response_mime_type": "application/json",
+                    "responseMimeType": "application/json",
                     "temperature": 0.0,
                     "maxOutputTokens": 150
                 }
@@ -350,12 +350,12 @@ class AnimalProcessor:
             payload = {
                 "contents": [{
                     "parts": [
-                        {"inline_data": {"mime_type": "image/jpeg", "data": img_b64}},
+                        {"inlineData": {"mimeType": "image/jpeg", "data": img_b64}},
                         {"text": prompt}
                     ]
                 }],
                 "generationConfig": {
-                    "response_mime_type": "application/json",
+                    "responseMimeType": "application/json",
                     "temperature": 0.15,
                     "maxOutputTokens": 600
                 }
@@ -772,12 +772,12 @@ class AnimalProcessor:
             payload = {
                 "contents": [{
                     "parts": [
-                        {"inline_data": {"mime_type": "image/jpeg", "data": img_b64}},
+                        {"inlineData": {"mimeType": "image/jpeg", "data": img_b64}},
                         {"text": prompt}
                     ]
                 }],
                 "generationConfig": {
-                    "response_mime_type": "application/json",
+                    "responseMimeType": "application/json",
                     "temperature": 0.05,
                     "maxOutputTokens": 700
                 }
