@@ -1069,8 +1069,8 @@ def health_check() -> Response:
     gemini_configured = bool(os.environ.get('GEMINI_API_KEY', '').strip())
     return jsonify({
         'status': 'healthy',
-        'version': '3.3.1',
-        'deploy_version': '2026-06-14-v5-fix-thinking-tokens',
+        'version': '3.3.2',
+        'deploy_version': '2026-06-14-v6-max-tokens',
         'service': 'LivestockAI Weight Estimation API',
         'timestamp': datetime.now().isoformat(),
         'features': {
