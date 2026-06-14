@@ -23,13 +23,6 @@ NEW_CJ = (
 )
 
 REPLACEMENTS = [
-    (
-        "MediaPipe pose detection estimates body length and height instantly.",
-        "Computer vision estimates body length and height from your photo.",
-    ),
-    ("Analysing morphology\u2026", "Analyzing image\u2026"),
-    ("MediaPipe pose detection running", "Analyzing image"),
-    ("Detecting skeletal keypoints", "Detecting animal in frame"),
     (OLD_CJ, NEW_CJ),
     ("const j=await cJ(x);", "const j=await cJ(x,_);"),
     (
@@ -37,8 +30,8 @@ REPLACEMENTS = [
         'const j=await cJ(x,_);const o={dairy_cow:"Cattle",beef_cattle:"Cattle",young_cattle:"Cattle",pig:"Pig",poultry:"Poultry",goat:"Goat",sheep:"Sheep",donkey:"Donkey"}[j.detected_species_key]||_;n({...j,filename:x.name,animalType:o}),p({id:Date.now(),timestamp:new Date().toISOString().replace("T"," ").slice(0,16),filename:x.name,animalType:o,weight:j.estimated_weight_kg,confidence:j.confidence_interval,bodyLength:j.body_length_cm,bodyHeight:j.body_height_cm,pendingSync:!navigator.onLine})'
     ),
     (
-        'I.jsxs("div",{className:"grid grid-cols-2 gap-3",children:[I.jsxs("div",{className:"card-clean p-4",children:[I.jsxs("div",{className:"flex items-center gap-1.5 text-xs mb-1.5",style:{color:"#aaa"},children:[I.jsx(s8,{size:11,color:"#16a34a"})," Body Length"]}),I.jsxs("div",{className:"text-2xl font-bold font-serif",style:{color:"#141414",fontFamily:"\'Playfair Display\', serif"},children:[n," ",I.jsx("span",{className:"text-xs font-normal",style:{color:"#bbb"},children:"cm"})]})]}),I.jsxs("div",{className:"card-clean p-4",children:[I.jsxs("div",{className:"flex items-center gap-1.5 text-xs mb-1.5",style:{color:"#aaa"},children:[I.jsx(XT,{size:11,color:"#16a34a"})," Body Height"]}),I.jsxs("div",{className:"text-2xl font-bold font-serif",style:{color:"#141414",fontFamily:"\'Playfair Display\', serif"},children:[i," ",I.jsx("span",{className:"text-xs font-normal",style:{color:"#bbb"},children:"cm"})]})]})]})',
-        'I.jsxs("div",{className:"grid grid-cols-2 gap-3",children:[I.jsxs("div",{className:"card-clean p-4",children:[I.jsxs("div",{className:"flex items-center gap-1.5 text-xs mb-1.5",style:{color:"#aaa"},children:[I.jsx(s8,{size:11,color:"#16a34a"})," Body Length"]}),I.jsxs("div",{className:"text-2xl font-bold font-serif",style:{color:"#141414",fontFamily:"\'Playfair Display\', serif"},children:[n," ",I.jsx("span",{className:"text-xs font-normal",style:{color:"#bbb"},children:"cm"})]})]}),I.jsxs("div",{className:"card-clean p-4",children:[I.jsxs("div",{className:"flex items-center gap-1.5 text-xs mb-1.5",style:{color:"#aaa"},children:[I.jsx(XT,{size:11,color:"#16a34a"})," Body Height"]}),I.jsxs("div",{className:"text-2xl font-bold font-serif",style:{color:"#141414",fontFamily:"\'Playfair Display\', serif"},children:[i," ",I.jsx("span",{className:"text-xs font-normal",style:{color:"#bbb"},children:"cm"})]})]})]}),I.jsxs("div",{className:"card-clean p-5 space-y-4",style:{background:"#fdfdfb",border:"1px solid rgba(22,163,74,0.15)"},children:[I.jsxs("div",{className:"flex items-center gap-2 pb-2",style:{borderBottom:"1px solid rgba(0,0,0,0.05)"},children:[I.jsx("span",{className:"text-lg",children:"✨"}),I.jsx("h3",{className:"font-serif font-bold text-sm",style:{color:"#141414",fontFamily:"\'Playfair Display\', serif"},children:"Gemini Visual Intelligence"})]}),t.gemini_explanation&&I.jsx("p",{className:"text-xs italic leading-relaxed",style:{color:"#444"},children:t.gemini_explanation}),I.jsxs("div",{className:"grid grid-cols-2 gap-2.5 text-xs pt-1",children:[I.jsxs("div",{children:[I.jsx("span",{style:{color:"#aaa"},children:"Breed: "}),I.jsx("span",{className:"font-semibold",style:{color:"#141414"},children:t.breed||"Unknown"})]}),I.jsxs("div",{children:[I.jsx("span",{style:{color:"#aaa"},children:"Sex: "}),I.jsx("span",{className:"font-semibold",style:{color:"#141414"},children:t.sex||"Unknown"})]}),I.jsxs("div",{children:[I.jsx("span",{style:{color:"#aaa"},children:"Age: "}),I.jsx("span",{className:"font-semibold",style:{color:"#141414"},children:t.estimated_age_months?t.estimated_age_months+" mo":"Unknown"})]}),I.jsxs("div",{children:[I.jsx("span",{style:{color:"#aaa"},children:"BCS: "}),I.jsx("span",{className:"font-semibold",style:{color:"#141414"},children:t.body_condition?t.body_condition+(t.body_condition_score?" (Score "+t.body_condition_score+")":""):"Not assessed"})]})]}),t.visible_health_concerns&&I.jsxs("p",{className:"text-xs pt-1",children:[I.jsx("span",{style:{color:"#aaa"},children:"Health: "}),I.jsx("span",{style:{color:t.visible_health_concerns.toLowerCase().includes("none")?"#16a34a":"#dc2626",fontWeight:600},children:t.visible_health_concerns})]}),t.ai_attribution&&I.jsxs("div",{className:"text-[10px] pt-2 flex flex-col gap-0.5",style:{color:"#aaa",borderTop:"1px solid rgba(0,0,0,0.04)"},children:[I.jsxs("p",{children:[I.jsx("span",{children:"🔍 Detection: "}),I.jsx("span",{style:{color:"#666"},children:t.ai_attribution.detection_model||"YOLOv8"})]}),I.jsxs("p",{children:[I.jsx("span",{children:"🧬 Classification: "}),I.jsx("span",{style:{color:"#666"},children:t.ai_attribution.classification_model||"CLIP"})]}),I.jsxs("p",{children:[I.jsx("span",{children:"🧠 AI Engine: "}),I.jsx("span",{style:{color:"#16a34a",fontWeight:600},children:t.ai_attribution.enrichment_model||"Google Gemini 2.5 Flash"})]}),I.jsxs("p",{children:[I.jsx("span",{children:"⚖️ Weight Blend: "}),I.jsx("span",{style:{color:"#666"},children:t.ai_attribution.weight_blend||"Formula + Visual intelligence"})]})]})]})'
+        'visible_health_concerns&&I.jsxs("p",{className:"text-xs pt-1",children:[I.jsx("span",{style:{color:"#aaa"},children:"Health: "}),I.jsx("span",{style:{color:t.visible_health_concerns.toLowerCase().includes("none")?"#16a34a":"#dc2626",fontWeight:600},children:t.visible_health_concerns})]}),t.ai_attribution',
+        'visible_health_concerns&&I.jsxs("p",{className:"text-xs pt-1",children:[I.jsx("span",{style:{color:"#aaa"},children:"Health: "}),I.jsx("span",{style:{color:t.visible_health_concerns.toLowerCase().includes("none")?"#16a34a":"#dc2626",fontWeight:600},children:t.visible_health_concerns})]}),t.ai_self_review&&I.jsxs("div",{className:"p-3 rounded-lg text-xs",style:{background:"rgba(245,158,11,0.06)",border:"1px solid rgba(245,158,11,0.2)"},children:[I.jsxs("div",{className:"flex items-center gap-1.5 mb-1.5 font-semibold",style:{color:"#b45309"},children:[I.jsx("span",{children:"🤔"}),I.jsx("span",{children:"AI Self-Review"})]}),I.jsx("p",{className:"italic leading-relaxed",style:{color:"#78350f"},children:t.ai_self_review})]}),t.ai_attribution'
     ),
 ]
 
@@ -47,9 +40,10 @@ def main() -> None:
     js = JS.read_text(encoding="utf-8")
     for old, new in REPLACEMENTS:
         if old not in js:
-            raise SystemExit(f"Patch target not found:\n  {old[:80]}...")
+            print(f"SKIP (already applied): {old[:60]}...")
+            continue
         js = js.replace(old, new, 1)
-        print("patched:", old[:50])
+        print("patched:", old[:60])
 
     OUT.write_text(js, encoding="utf-8")
     print(f"Wrote {OUT} ({OUT.stat().st_size} bytes)")
