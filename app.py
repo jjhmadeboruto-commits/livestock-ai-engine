@@ -353,7 +353,7 @@ def debug_vision_models() -> Response:
             results[model] = {'status': 'EXCEPTION', 'error': f'{type(e).__name__}: {str(e)}'}
             
     return jsonify({
-        'img_path': img_path,
+        'img_url': img_url,
         'img_size': len(img_bytes),
         'results': results
     }), 200
