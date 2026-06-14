@@ -209,24 +209,30 @@ class AnimalProcessor:
         """
         Calls Google Gemini API using urllib.request, attempting a list of models
         with automatic fallback if quota or rate limit errors are encountered.
-        Uses only verified real model identifiers.
+        Uses confirmed real model identifiers in order of preference.
         """
         import json, urllib.request, urllib.error, ssl
         api_key = os.environ.get("GEMINI_API_KEY", "").strip()
         if not api_key:
             return None
 
-        # Verified real Gemini model identifiers (v1beta API) in priority order:
-        # 1. gemini-2.5-flash: Latest, best vision quality, confirmed working
-        # 2. gemini-2.0-flash: Fast, good quota, confirmed working
-        # 3. gemini-1.5-flash: Stable fallback with large free tier
-        # 4. gemini-1.5-flash-8b: Smallest quota impact, last resort
+        # Confirmed working Gemini model identifiers (v1beta API) in priority order:
+        # 1. gemini-2.5-flash: Latest, best vision, confirmed working
+        # 2. gemini-3.5-flash: New model, confirmed working for vision
+        # 3. gemini-3.1-flash-lite: Fast fallback, confirmed working for vision
+        # 4. gemini-2.0-flash: Good quota, confirmed working (may hit 429)
         models = [
             "gemini-2.5-flash",
+            "gemini-3.5-flash",
+            "gemini-3.1-flash-lite",
             "gemini-2.0-flash",
-            "gemini-1.5-flash",
-            "gemini-1.5-flash-8b",
         ]
+        friendly_names = {
+            "gemini-2.5-flash":      "Google Gemini 2.5 Flash",
+            "gemini-3.5-flash":      "Google Gemini 3.5 Flash",
+            "gemini-3.1-flash-lite": "Google Gemini 3.1 Flash-Lite",
+            "gemini-2.0-flash":      "Google Gemini 2.0 Flash",
+        }
         ctx = ssl.create_default_context()
         last_error = None
 
@@ -240,12 +246,6 @@ class AnimalProcessor:
                 logging.info(f"Calling Gemini API via model: {model}...")
                 with urllib.request.urlopen(req, context=ctx, timeout=timeout) as resp:
                     raw_response = resp.read().decode("utf-8")
-                    friendly_names = {
-                        "gemini-2.5-flash":    "Google Gemini 2.5 Flash",
-                        "gemini-2.0-flash":    "Google Gemini 2.0 Flash",
-                        "gemini-1.5-flash":    "Google Gemini 1.5 Flash",
-                        "gemini-1.5-flash-8b": "Google Gemini 1.5 Flash-8B",
-                    }
                     self.last_gemini_model_used = friendly_names.get(model, f"Google Gemini ({model})")
                     logging.info(f"Gemini API success via {model}")
                     return json.loads(raw_response)
@@ -262,10 +262,124 @@ class AnimalProcessor:
         logging.error(f"All Gemini models failed. Last error: {last_error}")
         return None
 
+    @staticmethod
+    def _strip_json_from_response(raw: str) -> str:
+        """
+        Robustly strip markdown code fences and thinking blocks from a Gemini response
+        to extract clean JSON. Handles: ```json...```, ```...```, <think>...</think> etc.
+        """
+        if not raw:
+            return raw
+        # Remove <think>...</think> blocks (gemini 3.x thinking output)
+        import re
+        raw = re.sub(r'<think>.*?</think>', '', raw, flags=re.DOTALL).strip()
+        # Remove ```json ... ``` or ``` ... ``` markdown code fences
+        if '```' in raw:
+            # Find the first { after any opening fence
+            json_start = raw.find('{')
+            json_end = raw.rfind('}')
+            if json_start != -1 and json_end != -1:
+                return raw[json_start:json_end + 1].strip()
+        return raw.strip()
+
     # ─────────────────────────────────────────────────────────────────────────
-    # Gemini Gatekeeper — First line of defence (is this even an animal?)
+    # Gemini Combined Analyze — Gate + Enrich in ONE API call
     # ─────────────────────────────────────────────────────────────────────────
 
+    def _gemini_analyze(self, image_bgr: np.ndarray, requested_species: str = "unknown") -> dict:
+        """
+        Single Gemini API call that combines the gate check AND the full enrichment.
+        This avoids making 2 sequential API calls which hits rate limits.
+
+        Returns a dict with all enrichment fields PLUS:
+          - is_livestock: bool  (gate check)
+          - rejection_reason: str (if not livestock)
+
+        Returns {"is_livestock": True} on any API failure (fail-open for gate).
+        Returns {} enrichment fields on any failure (fail-gracefully for enrichment).
+        """
+        api_key = os.environ.get("GEMINI_API_KEY", "").strip()
+        if not api_key:
+            return {"is_livestock": True}
+
+        try:
+            success, buf = cv2.imencode(".jpg", image_bgr, [cv2.IMWRITE_JPEG_QUALITY, 80])
+            if not success:
+                return {"is_livestock": True}
+            img_b64 = base64.b64encode(buf.tobytes()).decode("utf-8")
+
+            prompt = (
+                f"You are a professional livestock veterinarian and AI assistant for a farming application.\n"
+                f"The farmer believes this image shows a {requested_species}.\n\n"
+                "TASK 1 — GATE CHECK: First determine if this is a supported livestock animal.\n"
+                "Supported species: cattle (cow/bull/calf), pig, goat, sheep, donkey, poultry (chicken/duck/turkey).\n"
+                "If it is NOT livestock (e.g. dog, cat, person, phone, screenshot), set is_livestock to false and fill rejection_reason.\n\n"
+                "TASK 2 — ENRICHMENT: If it IS livestock, fill in all the analysis fields below.\n\n"
+                "Return ONLY a valid JSON object with exactly these keys:\n"
+                "{\n"
+                "  \"is_livestock\": <true or false>,\n"
+                "  \"rejection_reason\": \"<if is_livestock is false: one clear sentence why it cannot be weighed. Empty string if livestock.>\",\n"
+                "  \"detected_species\": \"<what you actually see, e.g. Holstein cow, pig, goat, dog, cat, phone>\",\n"
+                "  \"breed\": \"<specific breed name, e.g. Holstein-Friesian, Duroc, Boer Goat, or Mixed/Unknown>\",\n"
+                "  \"sex\": \"<male, female, or unknown>\",\n"
+                "  \"estimated_age_months\": <integer — best estimate of age in months>,\n"
+                "  \"body_condition\": \"<exactly one of: thin, fair, good, excellent>\",\n"
+                "  \"body_condition_score\": <integer 1 to 5>,\n"
+                "  \"posture\": \"<e.g. standing alert, grazing, resting, walking>\",\n"
+                "  \"activity_level\": \"<calm, moderate, or active>\",\n"
+                "  \"visible_health_concerns\": \"<any visible issues like wounds, lameness, distended belly, or None observed>\",\n"
+                "  \"estimated_weight_range_kg\": [<min_integer>, <max_integer>],\n"
+                "  \"photo_quality_note\": \"<one short sentence on photo quality and positioning>\",\n"
+                "  \"gemini_explanation\": \"<A warm, clear, 3-5 sentence explanation written directly TO the farmer. Start with what you visually observed. Explain WHY you estimated the weight — mentioning breed, body condition, age, belly size, muscle development. Say what would improve accuracy. End with a helpful farming tip.>\"\n"
+                "}\n\n"
+                "Body condition scoring: 1=Emaciated(thin), 2=Very thin(thin), 3=Moderate(fair), 4=Good(good), 5=Excellent/Obese(excellent)\n"
+                "Weight guide: dairy cows 400-700 kg, beef bulls 500-800 kg, calves 50-200 kg, pigs 80-250 kg, goats 20-90 kg, sheep 30-120 kg, donkeys 80-300 kg, poultry 0.5-8 kg\n"
+                "NEVER estimate above biologically plausible maximums.\n"
+                "Return ONLY the JSON object. No other text, no markdown, no code fences."
+            )
+
+            payload = {
+                "contents": [{
+                    "parts": [
+                        {"inlineData": {"mimeType": "image/jpeg", "data": img_b64}},
+                        {"text": prompt}
+                    ]
+                }],
+                "generationConfig": {
+                    "temperature": 0.1,
+                    "maxOutputTokens": 700
+                }
+            }
+
+            response = self._call_gemini_api(payload, timeout=30)
+            if not response:
+                logging.warning("Gemini analyze: no response from API — failing open (is_livestock=True, no enrichment)")
+                return {"is_livestock": True}
+
+            raw = response["candidates"][0]["content"]["parts"][0]["text"]
+            raw = self._strip_json_from_response(raw)
+
+            data = json.loads(raw)
+            logging.info(
+                f"Gemini analyze OK: is_livestock={data.get('is_livestock')}, "
+                f"species={data.get('detected_species')}, breed={data.get('breed')}, "
+                f"condition={data.get('body_condition')}, range={data.get('estimated_weight_range_kg')}"
+            )
+            return data
+
+        except json.JSONDecodeError as e:
+            logging.error(f"Gemini analyze: non-JSON response (JSONDecodeError: {e}). raw={repr(raw if 'raw' in dir() else 'N/A')[:200]}")
+            return {"is_livestock": True}
+        except urllib.error.HTTPError as e:
+            err_body = e.read().decode("utf-8", errors="replace")
+            logging.warning(f"Gemini analyze HTTP {e.code}: {err_body[:300]}")
+            return {"is_livestock": True}
+        except Exception as e:
+            import traceback
+            logging.warning(f"Gemini analyze failed ({type(e).__name__}): {e}\n{traceback.format_exc()}")
+            return {"is_livestock": True}
+
+    # Keep _gemini_gate for backwards compat (calls _gemini_analyze now)
     def _gemini_gate(self, image_bgr: np.ndarray) -> dict:
         """
         Calls Gemini with a lightweight gatekeeper prompt BEFORE any weight
@@ -464,11 +578,15 @@ class AnimalProcessor:
         calibration          = self.LIVESTOCK_CALIBRATION[self.animal_type]
         target_coco_classes  = calibration["coco_classes"]
 
-        # ── Step 0: Gemini Gatekeeper — reject non-livestock FIRST ────────────
-        gate_result = self._gemini_gate(image_bgr)
-        if not gate_result.get("is_livestock", True):
-            detected_thing = gate_result.get("detected_species", "unknown object")
-            rejection_msg  = gate_result.get(
+        # ── Step 0: Gemini Combined Gate + Enrichment (ONE API call) ─────────
+        # We call _gemini_analyze which checks is_livestock AND retrieves all
+        # breed/BCS/explanation data in a single API call to avoid rate limits.
+        gemini_data = self._gemini_analyze(image_bgr, requested_species=self.animal_type)
+        
+        # Gate check — reject non-livestock early before any geometry work
+        if not gemini_data.get("is_livestock", True):
+            detected_thing = gemini_data.get("detected_species", "unknown object")
+            rejection_msg  = gemini_data.get(
                 "rejection_reason",
                 f"No livestock animal detected. The image appears to contain: {detected_thing}. "
                 "Please upload a clear photo of a livestock animal (cattle, pig, goat, sheep, donkey, or poultry)."
@@ -587,13 +705,14 @@ class AnimalProcessor:
         if self.animal_type == "donkey":
             weight_kg = (girth_cm * length_cm) / 10.5
 
-        # ── Step 4: Gemini Enrichment ──────────────────────────────────────────
+        # ── Step 4: Gemini Enrichment (already fetched in Step 0) ─────────────
+        # gemini_data was populated by _gemini_analyze above — no second API call needed
+        # Crop still computed for reference but Gemini already analyzed full image
         crop_y1 = max(0, y1)
         crop_y2 = min(image_bgr.shape[0], y2)
         crop_x1 = max(0, x1)
         crop_x2 = min(image_bgr.shape[1], x2)
-        crop_for_gemini = image_bgr[crop_y1:crop_y2, crop_x1:crop_x2]
-        gemini_data = self._gemini_enrich(crop_for_gemini, requested_species=self.animal_type)
+        # gemini_data already populated from Step 0
 
         # ── Step 5: BCS Weight Correction ─────────────────────────────────────
         body_condition_raw = (gemini_data.get("body_condition") or "unknown").lower().strip()
