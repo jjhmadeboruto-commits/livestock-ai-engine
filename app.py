@@ -1,15 +1,18 @@
 import base64
+import os
 from io import BytesIO
 from datetime import datetime
 import importlib.util
 
 import cv2
 import numpy as np
-from flask import Flask, Response, jsonify, request
+from flask import Flask, Response, jsonify, request, send_from_directory
 from flask_cors import CORS
 from services.processor import AnimalProcessor
 
-app = Flask(__name__)
+# Serve the React frontend from the livestockai-frontend directory
+FRONTEND_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'livestockai-frontend')
+app = Flask(__name__, static_folder=FRONTEND_DIR, static_url_path='/')
 
 # Explicit CORS allowlist for frontend origins in development and production
 ALLOWED_ORIGINS = {
@@ -17,6 +20,8 @@ ALLOWED_ORIGINS = {
     "https://livestock-ai.vercel.app",
     "https://livestock-ai-frontend.vercel.app",
     "https://livestock-ai-engine.onrender.com",
+    "https://jjhboruto-livestock-ai-engine.hf.space",
+    "https://jjhmadeboruto-livestock-ai-engine.hf.space",
 }
 
 # Apply flask-cors for normal request/response flow
@@ -107,10 +112,31 @@ def health():
 
 @app.route('/')
 def index():
+    """Serve the React frontend app, or JSON status for API clients."""
+    # Serve the React app if the frontend directory exists
+    if os.path.isfile(os.path.join(FRONTEND_DIR, 'index.html')):
+        return send_from_directory(FRONTEND_DIR, 'index.html')
     return jsonify({
         'status': 'live',
         'message': 'LivestockAI service. Use /api/health or /api/estimate-weight'
     }), 200
+
+
+@app.route('/<path:filename>')
+def serve_frontend_static(filename):
+    """Serve any static assets (JS, CSS, images) from the frontend directory."""
+    # Don't intercept /api/* routes
+    if filename.startswith('api/'):
+        from flask import abort
+        abort(404)
+    filepath = os.path.join(FRONTEND_DIR, filename)
+    if os.path.isfile(filepath):
+        return send_from_directory(FRONTEND_DIR, filename)
+    # SPA fallback — return index.html for client-side routing
+    if os.path.isfile(os.path.join(FRONTEND_DIR, 'index.html')):
+        return send_from_directory(FRONTEND_DIR, 'index.html')
+    from flask import abort
+    abort(404)
 
 
 @app.route('/api/debug-yolo', methods=['GET'])
@@ -907,7 +933,7 @@ def health_check() -> Response:
     return jsonify({
         'status': 'healthy',
         'version': '3.2.0',
-        'deploy_version': '2026-06-14-v1beta-fix',
+        'deploy_version': '2026-06-14-v2-url-fix',
         'service': 'LivestockAI Weight Estimation API',
         'timestamp': datetime.now().isoformat(),
         'features': {
