@@ -276,8 +276,8 @@ def debug_gemini() -> Response:
     test_results = {}
     for model_name in ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-2.0-flash-lite', 'gemini-3.5-flash', 'gemini-3.1-flash-lite']:
         url = f'https://generativelanguage.googleapis.com/v1/models/{model_name}:generateContent?key={api_key}'
-        # Try text-only first to check quota; then vision
         for label, payload in [('text_test', payload_text_only), ('vision_test', payload_vision)]:
+            key_name = f"{model_name}_{label}"
             try:
                 body = json.dumps(payload).encode('utf-8')
                 req = urllib.request.Request(url, data=body, method='POST')
@@ -285,16 +285,14 @@ def debug_gemini() -> Response:
                 with urllib.request.urlopen(req, context=ctx, timeout=10) as r:
                     resp = json.loads(r.read().decode('utf-8'))
                 text = resp.get('candidates', [{}])[0].get('content', {}).get('parts', [{}])[0].get('text', '').strip()
-                test_results[model_name] = {'status': 'SUCCESS', 'test': label, 'response': text}
-                break  # stop once one succeeds
+                test_results[key_name] = {'status': 'SUCCESS', 'response': text}
             except urllib.error.HTTPError as e:
-                err_body = e.read().decode('utf-8', errors='replace')[:300]
-                test_results[model_name] = {'status': f'HTTP_ERROR_{e.code}', 'test': label, 'error': err_body}
+                err_body = e.read().decode('utf-8', errors='replace')
+                test_results[key_name] = {'status': f'HTTP_ERROR_{e.code}', 'error': err_body}
                 if e.code == 429:
-                    break  # quota exhausted, no point testing vision
+                    break  # quota exhausted, stop testing this model
             except Exception as e:
-                test_results[model_name] = {'status': 'EXCEPTION', 'test': label, 'error': f'{type(e).__name__}: {str(e)}'}
-                break
+                test_results[key_name] = {'status': 'EXCEPTION', 'error': f'{type(e).__name__}: {str(e)}'}
 
     return jsonify({
         'gemini_key_set': True,
