@@ -286,7 +286,7 @@ class AnimalProcessor:
     # Gemini Combined Analyze — Gate + Enrich in ONE API call
     # ─────────────────────────────────────────────────────────────────────────
 
-    def _gemini_analyze(self, image_bgr: np.ndarray, requested_species: str = "unknown") -> dict:
+    def _gemini_analyze(self, image_bgr: np.ndarray, requested_species: str = "unknown", geometric_weight_kg: float = None) -> dict:
         """
         Single Gemini API call that combines the gate check AND the full enrichment.
         This avoids making 2 sequential API calls which hits rate limits.
@@ -310,8 +310,13 @@ class AnimalProcessor:
 
             prompt = (
                 f"You are a professional livestock veterinarian and AI assistant for a farming application.\n"
-                f"The farmer believes this image shows a {requested_species}.\n\n"
-                "TASK 1 — GATE CHECK: First determine if this is a supported livestock animal.\n"
+                f"The farmer believes this image shows a {requested_species}.\n"
+            )
+            if geometric_weight_kg is not None:
+                prompt += f"Our geometric computer vision model has estimated the weight at {geometric_weight_kg:.1f} kg based on the animal's bounding box.\n"
+            
+            prompt += (
+                "\nTASK 1 — GATE CHECK: First determine if this is a supported livestock animal.\n"
                 "Supported species: cattle (cow/bull/calf), pig, goat, sheep, donkey, poultry (chicken/duck/turkey).\n"
                 "If it is NOT livestock (e.g. dog, cat, person, phone, screenshot), set is_livestock to false and fill rejection_reason.\n\n"
                 "TASK 2 — ENRICHMENT: If it IS livestock, fill in all the analysis fields below.\n\n"
@@ -330,7 +335,8 @@ class AnimalProcessor:
                 "  \"visible_health_concerns\": \"<any visible issues like wounds, lameness, distended belly, or None observed>\",\n"
                 "  \"estimated_weight_range_kg\": [<min_integer>, <max_integer>],\n"
                 "  \"photo_quality_note\": \"<one short sentence on photo quality and positioning>\",\n"
-                "  \"gemini_explanation\": \"<A warm, clear, 3-5 sentence explanation written directly TO the farmer. Start with what you visually observed. Explain WHY you estimated the weight — mentioning breed, body condition, age, belly size, muscle development. Say what would improve accuracy. End with a helpful farming tip.>\"\n"
+                "  \"gemini_explanation\": \"<A warm, clear, 3-5 sentence explanation written directly TO the farmer. Start with what you visually observed. Explain WHY you estimated the weight — mentioning breed, body condition, age, belly size, muscle development. Say what would improve accuracy. End with a helpful farming tip.>\",\n"
+                "  \"ai_self_review\": \"<A short internal critique of the geometric weight estimate (if provided). Is the geometric weight feasible? Was it adjusted based on your visual assessment? Why?>\"\n"
                 "}\n\n"
                 "Body condition scoring: 1=Emaciated(thin), 2=Very thin(thin), 3=Moderate(fair), 4=Good(good), 5=Excellent/Obese(excellent)\n"
                 "Weight guide: dairy cows 400-700 kg, beef bulls 500-800 kg, calves 50-200 kg, pigs 80-250 kg, goats 20-90 kg, sheep 30-120 kg, donkeys 80-300 kg, poultry 0.5-8 kg\n"
@@ -578,28 +584,6 @@ class AnimalProcessor:
         calibration          = self.LIVESTOCK_CALIBRATION[self.animal_type]
         target_coco_classes  = calibration["coco_classes"]
 
-        # ── Step 0: Gemini Combined Gate + Enrichment (ONE API call) ─────────
-        # We call _gemini_analyze which checks is_livestock AND retrieves all
-        # breed/BCS/explanation data in a single API call to avoid rate limits.
-        gemini_data = self._gemini_analyze(image_bgr, requested_species=self.animal_type)
-        
-        # Gate check — reject non-livestock early before any geometry work
-        if not gemini_data.get("is_livestock", True):
-            detected_thing = gemini_data.get("detected_species", "unknown object")
-            rejection_msg  = gemini_data.get(
-                "rejection_reason",
-                f"No livestock animal detected. The image appears to contain: {detected_thing}. "
-                "Please upload a clear photo of a livestock animal (cattle, pig, goat, sheep, donkey, or poultry)."
-            )
-            return {
-                "weight": 0.0, "body_length": 0.0, "body_height": 0.0,
-                "estimated_girth": 0.0, "animal_type": "Invalid Target",
-                "confidence_score": 0.0, "annotated_image": image_bgr,
-                "expected_weight_range": [0, 0], "within_expected_range": False,
-                "method": "rejected",
-                "error_message": rejection_msg,
-                "detected_as": detected_thing,
-            }
 
         # ── Human detection + YOLO inference ──────────────────────────────────
         yolo_results = None
@@ -705,14 +689,28 @@ class AnimalProcessor:
         if self.animal_type == "donkey":
             weight_kg = (girth_cm * length_cm) / 10.5
 
-        # ── Step 4: Gemini Enrichment (already fetched in Step 0) ─────────────
-        # gemini_data was populated by _gemini_analyze above — no second API call needed
-        # Crop still computed for reference but Gemini already analyzed full image
-        crop_y1 = max(0, y1)
-        crop_y2 = min(image_bgr.shape[0], y2)
-        crop_x1 = max(0, x1)
-        crop_x2 = min(image_bgr.shape[1], x2)
-        # gemini_data already populated from Step 0
+        # ── Step 4: Gemini Combined Gate + Enrichment & Self-Review (ONE API call) ─────────
+        # We call _gemini_analyze and pass the raw geometric weight so the AI can evaluate it!
+        gemini_data = self._gemini_analyze(image_bgr, requested_species=self.animal_type, geometric_weight_kg=weight_kg)
+        
+        # Gate check — reject non-livestock (this now happens after geometric processing but still prevents wrong output)
+        if not gemini_data.get("is_livestock", True):
+            detected_thing = gemini_data.get("detected_species", "unknown object")
+            rejection_msg  = gemini_data.get(
+                "rejection_reason",
+                f"No livestock animal detected. The image appears to contain: {detected_thing}. "
+                "Please upload a clear photo of a livestock animal (cattle, pig, goat, sheep, donkey, or poultry)."
+            )
+            return {
+                "weight": 0.0, "body_length": 0.0, "body_height": 0.0,
+                "estimated_girth": 0.0, "animal_type": "Invalid Target",
+                "confidence_score": 0.0, "annotated_image": image_bgr,
+                "expected_weight_range": [0, 0], "within_expected_range": False,
+                "method": "rejected",
+                "error_message": rejection_msg,
+                "detected_as": detected_thing,
+            }
+
 
         # ── Step 5: BCS Weight Correction ─────────────────────────────────────
         body_condition_raw = (gemini_data.get("body_condition") or "unknown").lower().strip()
@@ -809,6 +807,7 @@ class AnimalProcessor:
             "health_notes":           gemini_data.get("visible_health_concerns", ""),
             "photo_quality_note":     gemini_data.get("photo_quality_note", ""),
             "gemini_explanation":     gemini_data.get("gemini_explanation", ""),
+            "ai_self_review":         gemini_data.get("ai_self_review", ""),
             "gemini_cross_check":     gemini_cross_check,
             # AI attribution
             "ai_attribution":         ai_attribution,
