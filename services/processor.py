@@ -347,7 +347,11 @@ class AnimalProcessor:
                 }],
                 "generationConfig": {
                     "temperature": 0.1,
-                    "maxOutputTokens": 700
+                    "maxOutputTokens": 2000
+                },
+                # Disable thinking mode for gemini-2.5-flash so all tokens go to JSON output
+                "thinkingConfig": {
+                    "thinkingBudget": 0
                 }
             }
 
