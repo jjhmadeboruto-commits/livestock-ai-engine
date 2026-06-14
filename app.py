@@ -306,6 +306,77 @@ def debug_gemini() -> Response:
 
 
 
+@app.route('/api/debug-enrich', methods=['POST'])
+def debug_enrich() -> Response:
+    import os, json, urllib.request, urllib.error, ssl, traceback
+    if 'image' not in request.files:
+        return jsonify({"error": "No image uploaded"}), 400
+    file = request.files['image']
+    file.stream.seek(0)
+    file_bytes = file.read()
+    image = _read_image_from_bytes(file_bytes)
+    if image is None:
+        return jsonify({"error": "Invalid image"}), 400
+    
+    # Replicate _gemini_enrich call with raw try-except block returning detail
+    api_key = os.environ.get("GEMINI_API_KEY", "").strip()
+    if not api_key:
+        return jsonify({"error": "GEMINI_API_KEY not set"}), 500
+        
+    try:
+        success, buf = cv2.imencode(".jpg", image, [cv2.IMWRITE_JPEG_QUALITY, 85])
+        if not success:
+            return jsonify({"error": "cv2 encode failed"}), 500
+        img_b64 = base64.b64encode(buf.tobytes()).decode("utf-8")
+        
+        # Test calling gemini-2.5-flash with prompt
+        prompt = "Look at this image. Identify the breed and color of the animal if any, else identify the object. Return JSON: {\"breed\": \"name\", \"color\": \"color\"}"
+        payload = {
+            "contents": [{
+                "parts": [
+                    {"inline_data": {"mime_type": "image/jpeg", "data": img_b64}},
+                    {"text": prompt}
+                ]
+            }],
+            "generationConfig": {
+                "response_mime_type": "application/json",
+                "temperature": 0.1,
+                "maxOutputTokens": 200
+            }
+        }
+        
+        url = f"https://generativelanguage.googleapis.com/v1/models/gemini-2.5-flash:generateContent?key={api_key}"
+        body = json.dumps(payload).encode("utf-8")
+        req = urllib.request.Request(url, data=body, method="POST")
+        req.add_header("Content-Type", "application/json")
+        
+        ctx = ssl.create_default_context()
+        with urllib.request.urlopen(req, context=ctx, timeout=30) as resp:
+            raw_response = resp.read().decode("utf-8")
+            data = json.loads(raw_response)
+            
+        return jsonify({
+            "status": "success",
+            "gemini_response": data,
+            "raw_text": data["candidates"][0]["content"]["parts"][0]["text"].strip()
+        }), 200
+        
+    except urllib.error.HTTPError as e:
+        err_body = e.read().decode("utf-8", errors="replace")
+        return jsonify({
+            "status": "http_error",
+            "code": e.code,
+            "error_body": err_body,
+            "traceback": traceback.format_exc()
+        }), 200
+    except Exception as e:
+        return jsonify({
+            "status": "exception",
+            "error": str(e),
+            "traceback": traceback.format_exc()
+        }), 200
+
+
 @app.route('/api/estimate-weight', methods=['POST', 'OPTIONS'])
 def estimate_weight() -> Response:
     if request.method == 'OPTIONS':
