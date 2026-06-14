@@ -459,6 +459,137 @@ def debug_enrich() -> Response:
         }), 200
 
 
+@app.route('/api/debug-processor-gate-and-enrich', methods=['POST'])
+def debug_processor_gate_and_enrich() -> Response:
+    """Call _gemini_gate and _gemini_enrich directly, capturing raw responses."""
+    import traceback, base64, cv2, os
+    if 'image' not in request.files:
+        return jsonify({'error': 'No image in request.files'}), 400
+    file = request.files['image']
+    img_bytes = file.read()
+    img_np = np.frombuffer(img_bytes, dtype=np.uint8)
+    image_bgr = cv2.imdecode(img_np, cv2.IMREAD_COLOR)
+    if image_bgr is None:
+        return jsonify({'error': 'Invalid image'}), 400
+
+    processor = AnimalProcessor()
+    
+    # 1. Test gate prompt
+    gate_api_key = os.environ.get("GEMINI_API_KEY", "").strip()
+    if not gate_api_key:
+        return jsonify({'error': 'GEMINI_API_KEY not set'}), 500
+
+    gate_payload = None
+    gate_raw_text = None
+    gate_error = None
+    try:
+        success, buf = cv2.imencode(".jpg", image_bgr, [cv2.IMWRITE_JPEG_QUALITY, 80])
+        if success:
+            img_b64 = base64.b64encode(buf.tobytes()).decode("utf-8")
+            prompt = (
+                "You are a livestock detection gatekeeper for a farming application.\n"
+                "Look at this image and determine if it contains a livestock animal.\n\n"
+                "Supported livestock species: cattle (cow/bull/calf), pig, goat, sheep, donkey, poultry (chicken/duck/turkey).\n\n"
+                "Return ONLY a valid JSON object with exactly these keys:\n"
+                "{\n"
+                "  \"is_livestock\": <true or false>,\n"
+                "  \"detected_species\": \"<what you actually see, e.g. pig, cow, dog, cat, mouse, phone, person, website, gadget>\",\n"
+                "  \"confidence\": \"<high, medium, or low>\",\n"
+                "  \"rejection_reason\": \"<if is_livestock is false: one clear sentence explaining what is in the image and why it cannot be weighed>\"\n"
+                "}\n\n"
+                "Be STRICT: a mouse, rat, dog, cat, wild animal, person, screenshot, website, or any non-livestock image must return is_livestock: false.\n"
+                "Return ONLY the JSON object. No other text."
+            )
+            payload = {
+                "contents": [{
+                    "parts": [
+                        {"inlineData": {"mimeType": "image/jpeg", "data": img_b64}},
+                        {"text": prompt}
+                    ]
+                }],
+                "generationConfig": {
+                    "temperature": 0.0,
+                    "maxOutputTokens": 150
+                }
+            }
+            gate_payload = payload
+            resp = processor._call_gemini_api(payload, timeout=20)
+            if resp:
+                gate_raw_text = resp["candidates"][0]["content"]["parts"][0]["text"].strip()
+            else:
+                gate_error = "No response from _call_gemini_api"
+    except Exception as e:
+        gate_error = f"{type(e).__name__}: {str(e)}\n{traceback.format_exc()}"
+
+    # 2. Test enrich prompt
+    enrich_payload = None
+    enrich_raw_text = None
+    enrich_error = None
+    try:
+        success, buf = cv2.imencode(".jpg", image_bgr, [cv2.IMWRITE_JPEG_QUALITY, 85])
+        if success:
+            img_b64 = base64.b64encode(buf.tobytes()).decode("utf-8")
+            prompt = (
+                f"You are a professional livestock veterinarian and expert body-condition scorer.\n"
+                f"The farmer has submitted a photo they believe shows a dairy_cow.\n"
+                f"Analyze this livestock image carefully and return ONLY a valid JSON object with these exact keys:\n\n"
+                "{\n"
+                "  \"breed\": \"<specific breed name, e.g. Large Black Pig, Duroc, Berkshire, Holstein, Boer Goat, or Mixed/Unknown>\",\n"
+                "  \"sex\": \"<male, female, or unknown>\",\n"
+                "  \"estimated_age_months\": <integer — your best estimate of the animal's age in months>,\n"
+                "  \"body_condition\": \"<exactly one of: thin, fair, good, excellent>\",\n"
+                "  \"body_condition_score\": <integer 1 to 5>,\n"
+                "  \"posture\": \"<e.g. standing alert, grazing, resting, walking>\",\n"
+                "  \"activity_level\": \"<calm, moderate, or active>\",\n"
+                "  \"visible_health_concerns\": \"<any visible issues like wounds, lameness, distended belly, mud coverage, or None observed>\",\n"
+                "  \"estimated_weight_range_kg\": [<min_integer>, <max_integer>],\n"
+                "  \"photo_quality_note\": \"<one short sentence on photo quality and positioning>\",\n"
+                "  \"gemini_explanation\": \"<A warm, clear, 3-5 sentence explanation written directly TO the farmer, in first person as Gemini. Start with what you visually observed about the animal. Explain WHY you estimated the weight you did — mentioning the breed, body condition, age, and any visual cues like belly size or muscle development. Mention what would make the estimate more accurate. End with a helpful farming insight.>\"\n"
+                "}\n\n"
+                "Body condition scoring guide:\n"
+                "  1 = Emaciated (thin)\n"
+                "  2 = Very thin (thin)\n"
+                "  3 = Moderate (fair)\n"
+                "  4 = Good (good)\n"
+                "  5 = Excellent/Obese (excellent)\n\n"
+                "Weight estimation guide:\n"
+                "  - Adult pigs typically weigh 80–250 kg. A large mature sow can be 180–300 kg.\n"
+                "  - Piglets (under 3 months) weigh 5–30 kg.\n"
+                "  - Cattle: dairy cows 400–700 kg, beef bulls 500–800 kg, calves 50–200 kg.\n"
+                "  - Goats: 20–90 kg. Sheep: 30–120 kg. Donkeys: 80–300 kg. Poultry: 0.5–8 kg.\n"
+                "  - NEVER estimate above biologically plausible maximums.\n\n"
+                "Be specific about the breed. Use your visual assessment of body size, muscle definition, and fat coverage.\n"
+                "Return ONLY the JSON object, no other text."
+            )
+            payload = {
+                "contents": [{
+                    "parts": [
+                        {"inlineData": {"mimeType": "image/jpeg", "data": img_b64}},
+                        {"text": prompt}
+                    ]
+                }],
+                "generationConfig": {
+                    "temperature": 0.15,
+                    "maxOutputTokens": 600
+                }
+            }
+            enrich_payload = payload
+            resp = processor._call_gemini_api(payload, timeout=30)
+            if resp:
+                enrich_raw_text = resp["candidates"][0]["content"]["parts"][0]["text"].strip()
+            else:
+                enrich_error = "No response from _call_gemini_api"
+    except Exception as e:
+        enrich_error = f"{type(e).__name__}: {str(e)}\n{traceback.format_exc()}"
+
+    return jsonify({
+        'gate_error': gate_error,
+        'gate_raw_text': gate_raw_text,
+        'enrich_error': enrich_error,
+        'enrich_raw_text': enrich_raw_text
+    }), 200
+
+
 @app.route('/api/estimate-weight', methods=['POST', 'OPTIONS'])
 def estimate_weight() -> Response:
     if request.method == 'OPTIONS':
