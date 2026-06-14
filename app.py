@@ -798,6 +798,7 @@ def estimate_weight() -> Response:
         'gemini_cross_check': result.get('gemini_cross_check'),
         # ── Gemini conversational explanation (show this to the user) ─────
         'gemini_explanation': result.get('gemini_explanation', ''),
+        'ai_self_review': result.get('ai_self_review', ''),
         # ── AI attribution (displayed in frontend as toast) ───────────────
         'ai_attribution': result.get('ai_attribution', {
             'detection_model': 'YOLOv8n (Ultralytics)',
@@ -1069,8 +1070,8 @@ def health_check() -> Response:
     gemini_configured = bool(os.environ.get('GEMINI_API_KEY', '').strip())
     return jsonify({
         'status': 'healthy',
-        'version': '3.4.0',
-        'deploy_version': '2026-06-14-v7-ai-self-review',
+        'version': '3.4.1',
+        'deploy_version': '2026-06-14-v8-ai-self-review-mapping',
         'service': 'LivestockAI Weight Estimation API',
         'timestamp': datetime.now().isoformat(),
         'features': {
