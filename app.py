@@ -303,6 +303,70 @@ def debug_gemini() -> Response:
     }), 200
 
 
+@app.route('/api/debug-vision-models', methods=['GET'])
+def debug_vision_models() -> Response:
+    """Test all Gemini models with a real image from the disk to see their vision response/errors."""
+    import os, json, urllib.request, urllib.error, ssl, traceback, base64
+    
+    api_key = os.environ.get('GEMINI_API_KEY', '').strip()
+    if not api_key:
+        return jsonify({'error': 'GEMINI_API_KEY not set'}), 500
+        
+    img_path = 'pig_test.jpg'
+    if not os.path.exists(img_path):
+        # try fallback paths
+        current_file_path = os.path.abspath(__file__)
+        root_dir = os.path.dirname(current_file_path)
+        img_path = os.path.join(root_dir, 'pig_test.jpg')
+        if not os.path.exists(img_path):
+            return jsonify({'error': f'pig_test.jpg not found at {img_path}'}), 404
+            
+    try:
+        with open(img_path, 'rb') as f:
+            img_bytes = f.read()
+        img_b64 = base64.b64encode(img_bytes).decode('utf-8')
+    except Exception as e:
+        return jsonify({'error': f'Failed to read pig_test.jpg: {e}'}), 500
+        
+    payload = {
+        'contents': [{
+            'parts': [
+                {'inlineData': {'mimeType': 'image/jpeg', 'data': img_b64}},
+                {'text': 'Identify the animal in this image. Return a JSON object: {"animal": "<name>"}'}
+            ]
+        }],
+        'generationConfig': {'maxOutputTokens': 50}
+    }
+    
+    ctx = ssl.create_default_context()
+    results = {}
+    models = ["gemini-3.5-flash", "gemini-2.5-flash", "gemini-3.1-flash-lite", "gemini-2.0-flash"]
+    
+    for model in models:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
+        body = json.dumps(payload).encode('utf-8')
+        req = urllib.request.Request(url, data=body, method='POST')
+        req.add_header('Content-Type', 'application/json')
+        
+        try:
+            with urllib.request.urlopen(req, context=ctx, timeout=20) as r:
+                resp = json.loads(r.read().decode('utf-8'))
+                text = resp.get('candidates', [{}])[0].get('content', {}).get('parts', [{}])[0].get('text', '').strip()
+                results[model] = {'status': 'SUCCESS', 'response': text}
+        except urllib.error.HTTPError as e:
+            err_body = e.read().decode('utf-8', errors='replace')
+            results[model] = {'status': f'HTTP_{e.code}', 'error': err_body}
+        except Exception as e:
+            results[model] = {'status': 'EXCEPTION', 'error': f'{type(e).__name__}: {str(e)}'}
+            
+    return jsonify({
+        'img_path': img_path,
+        'img_size': len(img_bytes),
+        'results': results
+    }), 200
+
+
+
 
 
 
