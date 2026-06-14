@@ -208,19 +208,25 @@ class AnimalProcessor:
     def _call_gemini_api(self, payload: dict, timeout: int = 30) -> Optional[dict]:
         """
         Calls Google Gemini API using urllib.request, attempting a list of models
-        with automatic fallback if a 429 (Quota/Rate Limit Exceeded) error is encountered.
+        with automatic fallback if quota or rate limit errors are encountered.
+        Uses only verified real model identifiers.
         """
         import json, urllib.request, urllib.error, ssl
         api_key = os.environ.get("GEMINI_API_KEY", "").strip()
         if not api_key:
             return None
 
-        # Fallback list of models:
-        # 1. gemini-3.5-flash: Latest model, large limits
-        # 2. gemini-2.5-flash: Standard model, fallback
-        # 3. gemini-3.1-flash-lite: Fast fallback
-        # 4. gemini-2.0-flash: Legacy fallback
-        models = ["gemini-3.5-flash", "gemini-2.5-flash", "gemini-3.1-flash-lite", "gemini-2.0-flash"]
+        # Verified real Gemini model identifiers (v1beta API) in priority order:
+        # 1. gemini-2.5-flash: Latest, best vision quality, confirmed working
+        # 2. gemini-2.0-flash: Fast, good quota, confirmed working
+        # 3. gemini-1.5-flash: Stable fallback with large free tier
+        # 4. gemini-1.5-flash-8b: Smallest quota impact, last resort
+        models = [
+            "gemini-2.5-flash",
+            "gemini-2.0-flash",
+            "gemini-1.5-flash",
+            "gemini-1.5-flash-8b",
+        ]
         ctx = ssl.create_default_context()
         last_error = None
 
@@ -235,17 +241,18 @@ class AnimalProcessor:
                 with urllib.request.urlopen(req, context=ctx, timeout=timeout) as resp:
                     raw_response = resp.read().decode("utf-8")
                     friendly_names = {
-                        "gemini-3.5-flash": "Google Gemini 3.5 Flash",
-                        "gemini-2.5-flash": "Google Gemini 2.5 Flash",
-                        "gemini-3.1-flash-lite": "Google Gemini 3.1 Flash-Lite",
-                        "gemini-2.0-flash": "Google Gemini 2.0 Flash"
+                        "gemini-2.5-flash":    "Google Gemini 2.5 Flash",
+                        "gemini-2.0-flash":    "Google Gemini 2.0 Flash",
+                        "gemini-1.5-flash":    "Google Gemini 1.5 Flash",
+                        "gemini-1.5-flash-8b": "Google Gemini 1.5 Flash-8B",
                     }
                     self.last_gemini_model_used = friendly_names.get(model, f"Google Gemini ({model})")
+                    logging.info(f"Gemini API success via {model}")
                     return json.loads(raw_response)
             except urllib.error.HTTPError as e:
                 err_body = e.read().decode("utf-8", errors="replace")
-                last_error = f"HTTP {e.code} for {model}: {err_body[:500]}"
-                logging.warning(f"Gemini model {model} failed with HTTP {e.code}: {last_error}. Trying next fallback...")
+                last_error = f"HTTP {e.code} for {model}: {err_body[:300]}"
+                logging.warning(f"Gemini model {model} failed with HTTP {e.code}. Trying next...")
                 continue
             except Exception as ex:
                 last_error = f"{type(ex).__name__} for {model}: {ex}"

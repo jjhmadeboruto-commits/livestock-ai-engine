@@ -300,7 +300,7 @@ def debug_gemini() -> Response:
     }
 
     test_results = {}
-    for model_name in ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-2.0-flash-lite', 'gemini-3.5-flash', 'gemini-3.1-flash-lite']:
+    for model_name in ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-1.5-flash', 'gemini-1.5-flash-8b']:
         url = f'https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}'
         for label, payload in [('text_test', payload_text_only), ('vision_test', payload_vision)]:
             key_name = f"{model_name}_{label}"
@@ -932,8 +932,8 @@ def health_check() -> Response:
     gemini_configured = bool(os.environ.get('GEMINI_API_KEY', '').strip())
     return jsonify({
         'status': 'healthy',
-        'version': '3.2.0',
-        'deploy_version': '2026-06-14-v2-url-fix',
+        'version': '3.2.1',
+        'deploy_version': '2026-06-14-v3-model-fix',
         'service': 'LivestockAI Weight Estimation API',
         'timestamp': datetime.now().isoformat(),
         'features': {
@@ -959,6 +959,7 @@ def health_check() -> Response:
             'classification': 'CLIP ViT-B/32 (OpenAI)',
             'enrichment': 'Google Gemini 2.5 Flash' if gemini_configured else 'Not configured',
             'self_critique': 'Google Gemini 2.5 Flash (validates its own answers)' if gemini_configured else 'Not configured',
+            'fallback_chain': 'gemini-2.5-flash → gemini-2.0-flash → gemini-1.5-flash → gemini-1.5-flash-8b',
         }
     }), 200
 
