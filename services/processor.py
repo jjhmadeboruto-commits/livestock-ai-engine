@@ -680,6 +680,283 @@ class AnimalProcessor:
         return cls.LIVESTOCK_CALIBRATION.copy()
 
     # ─────────────────────────────────────────────────────────────────────────
+    # Gemini Self-Critique — AI questions its own answer before showing it
+    # ─────────────────────────────────────────────────────────────────────────
+
+    def _gemini_self_critique(
+        self,
+        image_bgr: np.ndarray,
+        first_pass: dict,
+        proposed_weight_kg: float,
+        species_key: str,
+    ) -> dict:
+        """
+        After the first enrichment pass, Gemini reviews its own proposed weight
+        against biological norms and the image it sees, then either confirms or
+        corrects it. Returns a dict with:
+          - confirmed_weight_kg: float   (the final agreed weight)
+          - confidence_level: str        ("high" / "medium" / "low")
+          - critique_notes: str          (Gemini's self-review in plain English)
+          - was_adjusted: bool           (did Gemini change its answer?)
+          - adjustment_reason: str       (why it changed, if it did)
+          - final_explanation: str       (the complete user-facing explanation after critique)
+        Falls back to the first_pass data on any error.
+        """
+        api_key = os.environ.get("GEMINI_API_KEY", "").strip()
+        if not api_key:
+            return {
+                "confirmed_weight_kg": proposed_weight_kg,
+                "confidence_level":    "medium",
+                "critique_notes":      "Self-critique skipped (API key not set).",
+                "was_adjusted":        False,
+                "adjustment_reason":   "",
+                "final_explanation":   first_pass.get("gemini_explanation", ""),
+            }
+
+        calibration   = self.LIVESTOCK_CALIBRATION.get(species_key, {})
+        expected_min  = calibration.get("expected_range", [0, 800])[0]
+        expected_max  = calibration.get("expected_range", [0, 800])[1]
+        hard_cap      = self.WEIGHT_HARD_CAPS.get(species_key, 800)
+
+        breed        = first_pass.get("breed", "Unknown")
+        bcs          = first_pass.get("body_condition", "unknown")
+        bcs_score    = first_pass.get("body_condition_score", "?")
+        sex          = first_pass.get("sex", "unknown")
+        age_months   = first_pass.get("estimated_age_months", "unknown")
+        g_range      = first_pass.get("estimated_weight_range_kg", [expected_min, expected_max])
+        g_min        = g_range[0] if g_range else expected_min
+        g_max        = g_range[1] if g_range else expected_max
+        first_expl   = first_pass.get("gemini_explanation", "")
+
+        try:
+            success, buf = cv2.imencode(".jpg", image_bgr, [cv2.IMWRITE_JPEG_QUALITY, 80])
+            if not success:
+                raise ValueError("encode failed")
+            img_b64 = base64.b64encode(buf.tobytes()).decode("utf-8")
+
+            prompt = (
+                f"You are a precision livestock weight validation expert.\n\n"
+                f"You previously analysed this image and produced the following assessment:\n"
+                f"  - Species: {species_key}\n"
+                f"  - Breed: {breed}\n"
+                f"  - Sex: {sex}\n"
+                f"  - Estimated age: {age_months} months\n"
+                f"  - Body condition score: {bcs_score}/5 ({bcs})\n"
+                f"  - Your weight range estimate: {g_min}–{g_max} kg\n"
+                f"  - System's blended final weight: {proposed_weight_kg:.1f} kg\n\n"
+                f"Biological reference ranges:\n"
+                f"  - Normal range for {species_key}: {expected_min}–{expected_max} kg\n"
+                f"  - Absolute maximum possible: {hard_cap} kg\n\n"
+                f"TASK: Critically re-examine the image and your own assessment. Ask yourself:\n"
+                f"  1. Does {proposed_weight_kg:.1f} kg look realistic for this specific animal's visible body size?\n"
+                f"  2. Is the weight consistent with the breed, age, and body condition you described?\n"
+                f"  3. Are there any visual clues you missed the first time that would change your estimate?\n"
+                f"  4. Is anything biologically impossible or inconsistent?\n\n"
+                f"Return ONLY a valid JSON object with exactly these keys:\n"
+                "{\n"
+                f"  \"confirmed_weight_kg\": <your final agreed weight as a number — adjust if {proposed_weight_kg:.1f} kg seems wrong>,\n"
+                "  \"confidence_level\": \"<high, medium, or low>\",\n"
+                "  \"critique_notes\": \"<2-3 sentences: what you reconsidered and why — be honest if you caught an error>\",\n"
+                "  \"was_adjusted\": <true if you changed the weight, false if you confirmed it>,\n"
+                "  \"adjustment_reason\": \"<if was_adjusted is true: explain why you changed it; otherwise empty string>\",\n"
+                "  \"final_explanation\": \"<A complete, warm 4-6 sentence explanation written directly TO the farmer. "
+                "Start with what you see in the image. Explain the breed and body condition. "
+                "Give the confirmed weight with confidence. "
+                "Explain what visual cues drove the estimate. "
+                "End with one specific farming or management tip for this animal.>\"\n"
+                "}\n\n"
+                "Be honest — if your first estimate was wrong, correct it. "
+                "If it was right, confirm it with confidence. Return ONLY the JSON object."
+            )
+
+            payload = {
+                "contents": [{
+                    "parts": [
+                        {"inline_data": {"mime_type": "image/jpeg", "data": img_b64}},
+                        {"text": prompt}
+                    ]
+                }],
+                "generationConfig": {
+                    "response_mime_type": "application/json",
+                    "temperature": 0.05,
+                    "maxOutputTokens": 700
+                }
+            }
+
+            url = (
+                "https://generativelanguage.googleapis.com/v1/models/"
+                f"gemini-2.5-flash:generateContent?key={api_key}"
+            )
+            req_body = json.dumps(payload).encode("utf-8")
+            req = urllib.request.Request(url, data=req_body, method="POST")
+            req.add_header("Content-Type", "application/json")
+
+            ctx = ssl.create_default_context()
+            with urllib.request.urlopen(req, context=ctx, timeout=30) as resp:
+                response = json.loads(resp.read().decode("utf-8"))
+
+            raw = response["candidates"][0]["content"]["parts"][0]["text"].strip()
+            if raw.startswith("```"):
+                parts = raw.split("```")
+                raw = parts[1] if len(parts) > 1 else raw
+                if raw.startswith("json"):
+                    raw = raw[4:]
+            raw = raw.strip()
+
+            critique = json.loads(raw)
+
+            # Apply hard cap to Gemini's confirmed weight too
+            confirmed = float(critique.get("confirmed_weight_kg", proposed_weight_kg))
+            confirmed = max(
+                calibration.get("expected_range", [0, hard_cap])[0] * 0.5,
+                min(confirmed, hard_cap)
+            )
+            critique["confirmed_weight_kg"] = confirmed
+
+            logging.info(
+                f"Gemini self-critique: was_adjusted={critique.get('was_adjusted')}, "
+                f"proposed={proposed_weight_kg:.1f} → confirmed={confirmed:.1f} kg, "
+                f"confidence={critique.get('confidence_level')}"
+            )
+            return critique
+
+        except urllib.error.HTTPError as e:
+            err_body = e.read().decode("utf-8", errors="replace")
+            logging.warning(f"Gemini self-critique HTTP {e.code}: {err_body[:300]}")
+        except Exception as e:
+            logging.warning(f"Gemini self-critique failed ({type(e).__name__}): {e}")
+
+        return {
+            "confirmed_weight_kg": proposed_weight_kg,
+            "confidence_level":    "medium",
+            "critique_notes":      "Self-critique could not be completed — using first-pass estimate.",
+            "was_adjusted":        False,
+            "adjustment_reason":   "",
+            "final_explanation":   first_expl,
+        }
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # Live Camera Frame Processor
+    # ─────────────────────────────────────────────────────────────────────────
+
+    def process_live_frame(
+        self,
+        image_bgr: np.ndarray,
+        run_self_critique: bool = True,
+    ) -> Optional[Dict[str, object]]:
+        """
+        Optimised pipeline for live camera frames. Identical to process() but:
+          - Adds a Gemini self-critique step after enrichment
+          - Returns the critique-confirmed weight as the canonical weight
+          - Includes 'frame_analysis' with per-step reasoning visible to the user
+          - Skips pixel_ratio auto-scaling (live frames vary in size constantly)
+
+        The 'frame_analysis' dict is designed to be displayed step-by-step in
+        the frontend live-cam UI so users can follow the AI's reasoning.
+        """
+        # Re-use the full process() pipeline
+        result = self.process(image_bgr)
+
+        if result is None or result.get("method") == "rejected":
+            return result
+
+        proposed_weight = result["weight"]
+        species_key     = result.get("detected_species_key", self.animal_type)
+        gemini_data     = {
+            "breed":                   result.get("breed", "Unknown"),
+            "sex":                     result.get("sex", "Unknown"),
+            "estimated_age_months":    result.get("estimated_age_months"),
+            "body_condition":          result.get("body_condition", "unknown"),
+            "body_condition_score":    result.get("body_condition_score"),
+            "estimated_weight_range_kg": result.get("gemini_cross_check") and [
+                result["gemini_cross_check"]["min"],
+                result["gemini_cross_check"]["max"]
+            ],
+            "gemini_explanation":      result.get("gemini_explanation", ""),
+        }
+
+        # ── Self-critique step ────────────────────────────────────────────────
+        critique = {}
+        if run_self_critique:
+            # Crop the detected bounding box region for self-critique
+            # (use the full image if crop not available)
+            critique = self._gemini_self_critique(
+                image_bgr,
+                gemini_data,
+                proposed_weight,
+                species_key,
+            )
+
+        confirmed_weight = critique.get("confirmed_weight_kg", proposed_weight)
+        was_adjusted     = critique.get("was_adjusted", False)
+        confidence_level = critique.get("confidence_level", "medium")
+        critique_notes   = critique.get("critique_notes", "")
+        adjustment_reason= critique.get("adjustment_reason", "")
+        final_explanation= critique.get("final_explanation", result.get("gemini_explanation", ""))
+
+        # Build step-by-step frame_analysis for the frontend live-cam UI
+        frame_analysis = {
+            "step_1_gate": {
+                "label":   "🛡️ Livestock Verification",
+                "status":  "passed",
+                "detail":  f"Gemini confirmed: {result.get('animal_type', 'Livestock')} detected.",
+            },
+            "step_2_detection": {
+                "label":  "📦 Animal Detection",
+                "status": "passed",
+                "detail": f"Detection method: {result.get('method', 'unknown').upper()}. "
+                          f"Confidence: {round(result['confidence_score'] * 100, 1)}%.",
+            },
+            "step_3_species": {
+                "label":  "🔬 Species & Breed ID",
+                "status": "passed",
+                "detail": f"Species: {result.get('animal_type')}. Breed: {result.get('breed', 'Unknown')}. "
+                          f"Sex: {result.get('sex', 'Unknown')}. "
+                          f"Est. age: {result.get('estimated_age_months', '?')} months.",
+            },
+            "step_4_condition": {
+                "label":  "💪 Body Condition Assessment",
+                "status": "passed",
+                "detail": f"BCS: {result.get('body_condition_score', '?')}/5 ({result.get('body_condition', 'Not assessed')}). "
+                          f"Posture: {result.get('posture', 'unknown')}. "
+                          f"Activity: {result.get('activity_level', 'unknown')}.",
+            },
+            "step_5_weight": {
+                "label":  "⚖️ Initial Weight Estimate",
+                "status": "passed",
+                "detail": f"Geometric formula + Gemini visual blend → {proposed_weight:.1f} kg.",
+            },
+            "step_6_critique": {
+                "label":  "🤔 AI Self-Review",
+                "status": "adjusted" if was_adjusted else "confirmed",
+                "detail": (
+                    f"Gemini reconsidered and adjusted to {confirmed_weight:.1f} kg. Reason: {adjustment_reason}"
+                    if was_adjusted
+                    else f"Gemini confirmed {confirmed_weight:.1f} kg. {critique_notes}"
+                ),
+            },
+            "step_7_health": {
+                "label":  "🩺 Health Observations",
+                "status": "info",
+                "detail": result.get("visible_health_concerns", "None observed"),
+            },
+        }
+
+        # Merge the critique result into the main result dict
+        result["weight"]              = float(round(confirmed_weight, 2))
+        result["weight_kg"]           = float(round(confirmed_weight, 2))
+        result["proposed_weight_kg"]  = float(round(proposed_weight, 2))
+        result["was_adjusted"]        = was_adjusted
+        result["confidence_level"]    = confidence_level
+        result["critique_notes"]      = critique_notes
+        result["adjustment_reason"]   = adjustment_reason
+        result["gemini_explanation"]  = final_explanation
+        result["frame_analysis"]      = frame_analysis
+        result["live_cam_mode"]       = True
+
+        return result
+
+    # ─────────────────────────────────────────────────────────────────────────
     # CLIP Zero-Shot Species Classifier
     # ─────────────────────────────────────────────────────────────────────────
 

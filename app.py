@@ -522,6 +522,251 @@ def estimate_weight() -> Response:
     }), 200
 
 
+@app.route('/api/live-cam/status', methods=['GET'])
+def live_cam_status() -> Response:
+    """Quick heartbeat for the live cam feature."""
+    import os
+    gemini_configured = bool(os.environ.get('GEMINI_API_KEY', '').strip())
+    return jsonify({
+        'success': True,
+        'live_cam_available': True,
+        'gemini_active': gemini_configured,
+        'self_critique_enabled': gemini_configured,
+        'supported_animal_types': list(AnimalProcessor.LIVESTOCK_CALIBRATION.keys()),
+        'message': (
+            'Live cam is ready. Send base64 JPEG frames to /api/live-cam/frame'
+            if gemini_configured
+            else 'Live cam works but Gemini enrichment is not configured (GEMINI_API_KEY missing).'
+        ),
+        'tips': [
+            'Hold camera 2–3 metres from the animal.',
+            'Ensure the full side profile is visible.',
+            'Good lighting significantly improves accuracy.',
+            'Keep the camera steady — motion blur reduces detection quality.',
+        ]
+    }), 200
+
+
+@app.route('/api/live-cam/frame', methods=['POST', 'OPTIONS'])
+def live_cam_frame() -> Response:
+    """
+    Process a single live camera frame for livestock weight estimation.
+
+    Accepts JSON body:
+    {
+      "image_data": "<base64-encoded JPEG or PNG string>",
+      "animal_type": "pig",                 (optional, default: dairy_cow)
+      "animal_name": "Bessie",              (optional)
+      "farm_name": "Green Acres",           (optional)
+      "session_id": "user-xyz",             (optional, for history)
+      "run_self_critique": true,            (optional, default true — Gemini validates its own answer)
+      "save_to_history": false              (optional, default false for live frames)
+    }
+
+    Returns the full enrichment response including:
+    - weight_kg, breed, sex, estimated_age_months
+    - gemini_explanation  (Gemini speaking directly to the farmer)
+    - frame_analysis      (step-by-step AI reasoning chain)
+    - was_adjusted        (did the self-critique change the weight?)
+    - critique_notes      (what Gemini reconsidered)
+    - confidence_level    (high / medium / low)
+    - visible_health_concerns
+    - annotated_image_b64 (frame with bounding box drawn)
+    """
+    if request.method == 'OPTIONS':
+        return jsonify({'status': 'ok'}), 200
+
+    data = request.get_json(silent=True)
+    if not data:
+        # Also support multipart/form-data (for compatibility)
+        image_b64   = request.form.get('image_data', '')
+        animal_type = request.args.get('animal_type', request.form.get('animal_type', 'dairy_cow'))
+        animal_name = request.form.get('animal_name', 'Live Scan')
+        farm_name   = request.form.get('farm_name', 'Unknown Farm')
+        session_id  = request.form.get('session_id', 'live_default')
+        run_critique = request.form.get('run_self_critique', 'true').lower() == 'true'
+        save_history = request.form.get('save_to_history', 'false').lower() == 'true'
+    else:
+        image_b64   = data.get('image_data', '')
+        animal_type = data.get('animal_type', 'dairy_cow')
+        animal_name = data.get('animal_name', 'Live Scan')
+        farm_name   = data.get('farm_name', 'Unknown Farm')
+        session_id  = data.get('session_id', 'live_default')
+        run_critique = data.get('run_self_critique', True)
+        save_history = data.get('save_to_history', False)
+
+    # ── Validate image data ────────────────────────────────────────────────
+    if not image_b64:
+        return jsonify({
+            'status': 'error',
+            'success': False,
+            'message': 'No image_data provided. Send a base64-encoded JPEG or PNG string.',
+            'error_type': 'no_image',
+        }), 400
+
+    # Strip data URL prefix if present (e.g. "data:image/jpeg;base64,...")
+    if ',' in image_b64:
+        image_b64 = image_b64.split(',', 1)[1]
+
+    try:
+        file_bytes = base64.b64decode(image_b64)
+    except Exception:
+        return jsonify({
+            'status': 'error',
+            'success': False,
+            'message': 'Invalid base64 image data.',
+            'error_type': 'invalid_base64',
+        }), 400
+
+    image = _read_image_from_bytes(file_bytes)
+    if image is None:
+        return jsonify({
+            'status': 'error',
+            'success': False,
+            'message': 'Could not decode image. Ensure the frame is a valid JPEG or PNG.',
+            'error_type': 'invalid_image',
+        }), 400
+
+    # ── Validate animal type ──────────────────────────────────────────────
+    SUPPORTED = list(AnimalProcessor.LIVESTOCK_CALIBRATION.keys())
+    if animal_type not in SUPPORTED:
+        animal_type = 'dairy_cow'
+
+    # ── Build processor ───────────────────────────────────────────────────
+    try:
+        processor = AnimalProcessor(animal_type=animal_type)
+    except Exception as e:
+        return jsonify({
+            'status': 'error',
+            'success': False,
+            'message': str(e),
+            'error_type': 'processor_init_failed',
+        }), 500
+
+    # Apply any session calibration
+    if session_id in session_calibration:
+        processor.pixel_to_cm_ratio = session_calibration[session_id]
+        processor._pixel_ratio_user_set = True
+
+    # ── Image quality pre-check ───────────────────────────────────────────
+    quality_info = _assess_image_quality(image)
+
+    # ── Run full live-cam pipeline (with self-critique) ───────────────────
+    try:
+        result = processor.process_live_frame(image, run_self_critique=bool(run_critique))
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({
+            'status': 'error',
+            'success': False,
+            'message': f'Processing error: {str(e)}',
+            'error_type': 'processing_failed',
+        }), 500
+
+    # ── Handle rejection / no detection ──────────────────────────────────
+    if result is None or result.get('method') == 'rejected':
+        error_msg = result.get('error_message') if result else 'No animal detected in frame.'
+        detected_as = result.get('detected_as', '') if result else ''
+        return jsonify({
+            'status': 'no_detection',
+            'success': False,
+            'message': error_msg,
+            'detected_as': detected_as,
+            'error_type': 'detection_failed',
+            'image_quality': quality_info,
+            'live_cam_tip': (
+                'Point the camera at a livestock animal standing in clear side profile. '
+                'Ensure good lighting and hold the camera steady.'
+            ),
+        }), 200  # 200 so the frontend doesn't treat it as a crash
+
+    # ── Encode annotated frame ────────────────────────────────────────────
+    try:
+        annotated_b64 = _encode_image_to_base64(result['annotated_image'])
+    except Exception:
+        annotated_b64 = ''
+
+    method_used = result.get('method', 'unknown')
+    detected_species_key  = result.get('detected_species_key', animal_type)
+    detected_display_name = result.get('animal_type', 'Unknown')
+
+    # ── Optionally save to history ────────────────────────────────────────
+    if save_history:
+        scan_record = {
+            'timestamp': datetime.now().isoformat(),
+            'animal_name': animal_name,
+            'animal_type': detected_display_name,
+            'animal_type_key': detected_species_key,
+            'requested_animal_type': animal_type,
+            'farm_name': farm_name,
+            'weight': result['weight'],
+            'body_length': result.get('body_length', 0),
+            'body_height': result.get('body_height', 0),
+            'confidence_score': result.get('confidence_score', 0),
+            'breed': result.get('breed', 'Unknown'),
+            'sex': result.get('sex', 'Unknown'),
+            'estimated_age_months': result.get('estimated_age_months'),
+            'body_condition': result.get('body_condition', 'Not assessed'),
+            'within_expected_range': result.get('within_expected_range', True),
+            'method': method_used,
+            'source': 'live_cam',
+            'was_adjusted': result.get('was_adjusted', False),
+            'confidence_level': result.get('confidence_level', 'medium'),
+        }
+        scan_history.append(scan_record)
+
+    return jsonify({
+        'status': 'success',
+        'success': True,
+        'live_cam_mode': True,
+        # ── Core weight (critique-confirmed) ─────────────────────────────
+        'weight_kg': result['weight'],
+        'weight': result['weight'],
+        'proposed_weight_kg': result.get('proposed_weight_kg', result['weight']),
+        'was_adjusted': result.get('was_adjusted', False),
+        'adjustment_reason': result.get('adjustment_reason', ''),
+        'confidence_level': result.get('confidence_level', 'medium'),
+        'critique_notes': result.get('critique_notes', ''),
+        # ── Dimensions ───────────────────────────────────────────────────
+        'body_length_cm': result.get('body_length', 0),
+        'body_height_cm': result.get('body_height', 0),
+        'estimated_girth': result.get('estimated_girth', 0),
+        # ── Species info ─────────────────────────────────────────────────
+        'animal_type': detected_display_name,
+        'detected_species_key': detected_species_key,
+        'requested_animal_type': animal_type,
+        'species_corrected': detected_species_key != animal_type,
+        'confidence_score': result.get('confidence_score', 0),
+        # ── Gemini enrichment attributes ─────────────────────────────────
+        'breed': result.get('breed', 'Unknown'),
+        'sex': result.get('sex', 'Unknown'),
+        'estimated_age_months': result.get('estimated_age_months'),
+        'posture': result.get('posture', ''),
+        'activity_level': result.get('activity_level', ''),
+        'visible_health_concerns': result.get('visible_health_concerns', 'None observed'),
+        'body_condition': result.get('body_condition', 'Not assessed'),
+        'body_condition_score': result.get('body_condition_score'),
+        # ── Gemini conversational explanation ────────────────────────────
+        'gemini_explanation': result.get('gemini_explanation', ''),
+        'health_notes': result.get('health_notes', ''),
+        'photo_quality_note': result.get('photo_quality_note', ''),
+        # ── Step-by-step AI reasoning chain ─────────────────────────────
+        'frame_analysis': result.get('frame_analysis', {}),
+        # ── Range and quality metadata ───────────────────────────────────
+        'expected_weight_range': result.get('expected_weight_range'),
+        'within_expected_range': result.get('within_expected_range'),
+        'gemini_cross_check': result.get('gemini_cross_check'),
+        'image_quality': quality_info,
+        'method': method_used,
+        # ── Annotated frame with bounding box ────────────────────────────
+        'annotated_image': annotated_b64,
+        # ── AI attribution ────────────────────────────────────────────────
+        'ai_attribution': result.get('ai_attribution', {}),
+        'photo_guidance': result.get('photo_guidance', {}),
+    }), 200
+
+
 @app.route('/api/animal-types', methods=['GET'])
 def get_animal_types() -> Response:
     """Get available animal types and their calibration info."""
@@ -536,8 +781,8 @@ def health_check() -> Response:
     gemini_configured = bool(os.environ.get('GEMINI_API_KEY', '').strip())
     return jsonify({
         'status': 'healthy',
-        'version': '2.0.0',
-        'deploy_version': '2026-06-14-03',
+        'version': '3.0.0',
+        'deploy_version': '2026-06-14-04',
         'service': 'LivestockAI Weight Estimation API',
         'timestamp': datetime.now().isoformat(),
         'features': {
@@ -545,8 +790,13 @@ def health_check() -> Response:
             'calibration': True,
             'species_detection_clip': True,
             'gemini_enrichment': gemini_configured,
+            'gemini_gatekeeper': gemini_configured,
+            'gemini_self_critique': gemini_configured,
             'bcs_weight_correction': gemini_configured,
             'breed_identification': gemini_configured,
+            'sex_age_detection': gemini_configured,
+            'health_assessment': gemini_configured,
+            'live_cam': True,
             'hard_weight_caps': True,
             'photo_guidance': True,
             'ai_attribution': True,
@@ -557,8 +807,10 @@ def health_check() -> Response:
             'detection': 'YOLOv8n (Ultralytics)',
             'classification': 'CLIP ViT-B/32 (OpenAI)',
             'enrichment': 'Google Gemini 2.5 Flash' if gemini_configured else 'Not configured',
+            'self_critique': 'Google Gemini 2.5 Flash (validates its own answers)' if gemini_configured else 'Not configured',
         }
     }), 200
+
 
 
 @app.route('/api/scan-history', methods=['GET'])
