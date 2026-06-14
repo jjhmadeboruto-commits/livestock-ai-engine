@@ -307,11 +307,17 @@ class AnimalProcessor:
             return {}
 
         try:
+            # Guard against empty or zero-sized crops — use full image as fallback
+            if image_bgr is None or image_bgr.size == 0 or image_bgr.shape[0] < 10 or image_bgr.shape[1] < 10:
+                logging.warning("Gemini: crop too small or empty — this should not happen.")
+                return {}
+
             success, buf = cv2.imencode(".jpg", image_bgr, [cv2.IMWRITE_JPEG_QUALITY, 85])
             if not success:
                 logging.warning("Gemini: cv2.imencode failed — skipping.")
                 return {}
             img_b64 = base64.b64encode(buf.tobytes()).decode("utf-8")
+            logging.info(f"Gemini enrichment: encoded {len(buf)} bytes (b64 {len(img_b64)} chars) for species={requested_species}")
 
             prompt = (
                 f"You are a professional livestock veterinarian and expert body-condition scorer.\n"
@@ -389,13 +395,14 @@ class AnimalProcessor:
 
         except urllib.error.HTTPError as e:
             err_body = e.read().decode("utf-8", errors="replace")
-            logging.warning(f"Gemini HTTP {e.code}: {err_body[:400]}")
+            logging.error(f"Gemini enrichment HTTP {e.code} error: {err_body[:800]}")
             return {}
         except json.JSONDecodeError as e:
-            logging.warning(f"Gemini returned non-JSON: {e}")
+            logging.error(f"Gemini enrichment: non-JSON response: {e}")
             return {}
         except Exception as e:
-            logging.warning(f"Gemini enrichment failed ({type(e).__name__}): {e}")
+            import traceback
+            logging.error(f"Gemini enrichment failed ({type(e).__name__}): {e}\n{traceback.format_exc()}")
             return {}
 
     # ─────────────────────────────────────────────────────────────────────────
