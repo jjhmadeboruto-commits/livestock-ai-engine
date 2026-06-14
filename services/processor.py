@@ -202,6 +202,66 @@ class AnimalProcessor:
                 self.__class__._clip_processor = False
 
     # ─────────────────────────────────────────────────────────────────────────
+    # Gemini API Helper with robust Model Fallback
+    # ─────────────────────────────────────────────────────────────────────────
+
+    def _call_gemini_api(self, payload: dict, timeout: int = 30) -> Optional[dict]:
+        """
+        Calls Google Gemini API using urllib.request, attempting a list of models
+        with automatic fallback if a 429 (Quota/Rate Limit Exceeded) error is encountered.
+        """
+        import json, urllib.request, urllib.error, ssl
+        api_key = os.environ.get("GEMINI_API_KEY", "").strip()
+        if not api_key:
+            return None
+
+        # Fallback list of models:
+        # 1. gemini-3.5-flash: Latest model, large limits
+        # 2. gemini-2.5-flash: Standard model, fallback
+        # 3. gemini-3.1-flash-lite: Fast fallback
+        # 4. gemini-2.0-flash: Legacy fallback
+        models = ["gemini-3.5-flash", "gemini-2.5-flash", "gemini-3.1-flash-lite", "gemini-2.0-flash"]
+        ctx = ssl.create_default_context()
+        last_error = None
+
+        for model in models:
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
+            req_body = json.dumps(payload).encode("utf-8")
+            req = urllib.request.Request(url, data=req_body, method="POST")
+            req.add_header("Content-Type", "application/json")
+            
+            try:
+                logging.info(f"Calling Gemini API via model: {model}...")
+                with urllib.request.urlopen(req, context=ctx, timeout=timeout) as resp:
+                    raw_response = resp.read().decode("utf-8")
+                    friendly_names = {
+                        "gemini-3.5-flash": "Google Gemini 3.5 Flash",
+                        "gemini-2.5-flash": "Google Gemini 2.5 Flash",
+                        "gemini-3.1-flash-lite": "Google Gemini 3.1 Flash-Lite",
+                        "gemini-2.0-flash": "Google Gemini 2.0 Flash"
+                    }
+                    self.last_gemini_model_used = friendly_names.get(model, f"Google Gemini ({model})")
+                    return json.loads(raw_response)
+            except urllib.error.HTTPError as e:
+                err_body = e.read().decode("utf-8", errors="replace")
+                last_error = f"HTTP {e.code} for {model}: {err_body[:500]}"
+                if e.code == 429:
+                    logging.warning(f"Gemini model {model} rate limited/quota exceeded (429). Trying fallback...")
+                    continue
+                else:
+                    logging.error(f"Gemini model {model} failed with non-429 error: {last_error}")
+                    if e.code == 400 and "model" in err_body.lower():
+                        continue  # model-specific error, try next
+                    break
+            except Exception as ex:
+                last_error = f"{type(ex).__name__} for {model}: {ex}"
+                logging.error(f"Gemini model {model} request failed: {last_error}")
+                continue
+
+        logging.error(f"All Gemini models failed. Last error: {last_error}")
+        return None
+
+    # ─────────────────────────────────────────────────────────────────────────
     # Gemini Gatekeeper — First line of defence (is this even an animal?)
     # ─────────────────────────────────────────────────────────────────────────
 
@@ -256,17 +316,9 @@ class AnimalProcessor:
                 }
             }
 
-            url = (
-                "https://generativelanguage.googleapis.com/v1beta/models/"
-                f"gemini-2.5-flash:generateContent?key={api_key}"
-            )
-            req_body = json.dumps(payload).encode("utf-8")
-            req = urllib.request.Request(url, data=req_body, method="POST")
-            req.add_header("Content-Type", "application/json")
-
-            ctx = ssl.create_default_context()
-            with urllib.request.urlopen(req, context=ctx, timeout=20) as resp:
-                response = json.loads(resp.read().decode("utf-8"))
+            response = self._call_gemini_api(payload, timeout=20)
+            if not response:
+                return {"is_livestock": True, "detected_species": "unknown"}
 
             raw = response["candidates"][0]["content"]["parts"][0]["text"].strip()
             if raw.startswith("```"):
@@ -365,17 +417,9 @@ class AnimalProcessor:
                 }
             }
 
-            url = (
-                "https://generativelanguage.googleapis.com/v1beta/models/"
-                f"gemini-2.5-flash:generateContent?key={api_key}"
-            )
-            req_body = json.dumps(payload).encode("utf-8")
-            req = urllib.request.Request(url, data=req_body, method="POST")
-            req.add_header("Content-Type", "application/json")
-
-            ctx = ssl.create_default_context()
-            with urllib.request.urlopen(req, context=ctx, timeout=30) as resp:
-                response = json.loads(resp.read().decode("utf-8"))
+            response = self._call_gemini_api(payload, timeout=30)
+            if not response:
+                return {}
 
             raw = response["candidates"][0]["content"]["parts"][0]["text"].strip()
 
@@ -591,7 +635,7 @@ class AnimalProcessor:
         ai_attribution = {
             "detection_model":      "YOLOv8n (Ultralytics)",
             "classification_model": "CLIP ViT-B/32 (OpenAI)",
-            "enrichment_model":     "Google Gemini 2.5 Flash" if gemini_used else None,
+            "enrichment_model":     getattr(self, "last_gemini_model_used", "Google Gemini 3.5 Flash") if gemini_used else None,
             "weight_formula":       "Schoorl Girth Formula + Gemini Visual Intelligence",
             "bcs_correction":       (
                 f"BCS adjustment: {body_condition} (x{bcs_factor})"
@@ -787,17 +831,9 @@ class AnimalProcessor:
                 }
             }
 
-            url = (
-                "https://generativelanguage.googleapis.com/v1beta/models/"
-                f"gemini-2.5-flash:generateContent?key={api_key}"
-            )
-            req_body = json.dumps(payload).encode("utf-8")
-            req = urllib.request.Request(url, data=req_body, method="POST")
-            req.add_header("Content-Type", "application/json")
-
-            ctx = ssl.create_default_context()
-            with urllib.request.urlopen(req, context=ctx, timeout=30) as resp:
-                response = json.loads(resp.read().decode("utf-8"))
+            response = self._call_gemini_api(payload, timeout=30)
+            if not response:
+                raise Exception("Gemini self-critique: no response from API")
 
             raw = response["candidates"][0]["content"]["parts"][0]["text"].strip()
             if raw.startswith("```"):
