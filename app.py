@@ -599,7 +599,13 @@ def debug_processor_gate_and_enrich() -> Response:
 @app.route('/api/estimate-weight', methods=['POST', 'OPTIONS'])
 def estimate_weight() -> Response:
     if request.method == 'OPTIONS':
-        return jsonify({'status': 'ok'}), 200
+        resp = jsonify({'status': 'ok'})
+        origin = request.headers.get('Origin', '')
+        if origin in ALLOWED_ORIGINS:
+            resp.headers['Access-Control-Allow-Origin'] = origin
+        resp.headers['Access-Control-Allow-Methods'] = 'POST, OPTIONS'
+        resp.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization'
+        return resp, 200
         
     """Handle POST image uploads and return livestock weight estimation.
 
@@ -863,7 +869,13 @@ def live_cam_frame() -> Response:
     - annotated_image_b64 (frame with bounding box drawn)
     """
     if request.method == 'OPTIONS':
-        return jsonify({'status': 'ok'}), 200
+        resp = jsonify({'status': 'ok'})
+        origin = request.headers.get('Origin', '')
+        if origin in ALLOWED_ORIGINS:
+            resp.headers['Access-Control-Allow-Origin'] = origin
+        resp.headers['Access-Control-Allow-Methods'] = 'POST, OPTIONS'
+        resp.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization'
+        return resp, 200
 
     data = request.get_json(silent=True)
     if not data:
@@ -1059,8 +1071,15 @@ def live_cam_frame() -> Response:
 @app.route('/api/animal-types', methods=['GET'])
 def get_animal_types() -> Response:
     """Get available animal types and their calibration info."""
-    types = AnimalProcessor.get_available_types()
-    return jsonify({'success': True, 'animal_types': types, 'count': len(types)}), 200
+    raw = AnimalProcessor.get_available_types()
+    # Serialize sets (e.g. coco_classes) as sorted lists so JSON encoder doesn't blow up
+    serializable = []
+    for key, val in raw.items():
+        entry = {"type_key": key}
+        for k, v in val.items():
+            entry[k] = sorted(v) if isinstance(v, set) else v
+        serializable.append(entry)
+    return jsonify({'success': True, 'animal_types': serializable, 'count': len(serializable)}), 200
 
 
 @app.route('/api/health', methods=['GET'])
