@@ -14,29 +14,21 @@ from services.processor import AnimalProcessor
 FRONTEND_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'livestockai-frontend')
 app = Flask(__name__, static_folder=FRONTEND_DIR, static_url_path='/')
 
-# Explicit CORS allowlist for frontend origins in development and production
-ALLOWED_ORIGINS = {
-    "http://localhost:5173",
-    "https://livestock-ai.vercel.app",
-    "https://livestock-ai-frontend.vercel.app",
-    "https://livestock-ai-engine.onrender.com",
-    "https://jjhboruto-livestock-ai-engine.hf.space",
-    "https://jjhmadeboruto-livestock-ai-engine.hf.space",
-}
-
-# Apply flask-cors for normal request/response flow
-CORS(app, origins=list(ALLOWED_ORIGINS))
+# Apply flask-cors for normal request/response flow to allow all origins
+CORS(app, resources={r"/*": {"origins": "*"}})
 
 
 # Ensure CORS headers are always present, even on error responses
 @app.after_request
 def _ensure_cors_headers(response):
     origin = request.headers.get("Origin")
-    if origin in ALLOWED_ORIGINS:
+    if origin:
         response.headers["Access-Control-Allow-Origin"] = origin
+    else:
+        response.headers["Access-Control-Allow-Origin"] = "*"
     # Always allow common methods and headers for API usage
-    response.headers.setdefault("Access-Control-Allow-Methods", "GET,POST,OPTIONS,PUT,DELETE,PATCH")
-    response.headers.setdefault("Access-Control-Allow-Headers", "Content-Type,Authorization")
+    response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS, PUT, DELETE, PATCH"
+    response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
     return response
 
 # Session storage for calibration
@@ -116,9 +108,11 @@ def ping() -> Response:
     the Hugging Face Space from going to sleep during active scanning sessions."""
     if request.method == 'OPTIONS':
         resp = jsonify({'status': 'ok'})
-        origin = request.headers.get('Origin', '')
-        if origin in ALLOWED_ORIGINS:
+        origin = request.headers.get('Origin')
+        if origin:
             resp.headers['Access-Control-Allow-Origin'] = origin
+        else:
+            resp.headers['Access-Control-Allow-Origin'] = '*'
         resp.headers['Access-Control-Allow-Methods'] = 'GET, OPTIONS'
         resp.headers['Access-Control-Allow-Headers'] = 'Content-Type'
         return resp, 200
@@ -615,9 +609,11 @@ def debug_processor_gate_and_enrich() -> Response:
 def estimate_weight() -> Response:
     if request.method == 'OPTIONS':
         resp = jsonify({'status': 'ok'})
-        origin = request.headers.get('Origin', '')
-        if origin in ALLOWED_ORIGINS:
+        origin = request.headers.get('Origin')
+        if origin:
             resp.headers['Access-Control-Allow-Origin'] = origin
+        else:
+            resp.headers['Access-Control-Allow-Origin'] = '*'
         resp.headers['Access-Control-Allow-Methods'] = 'POST, OPTIONS'
         resp.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization'
         return resp, 200
@@ -885,9 +881,11 @@ def live_cam_frame() -> Response:
     """
     if request.method == 'OPTIONS':
         resp = jsonify({'status': 'ok'})
-        origin = request.headers.get('Origin', '')
-        if origin in ALLOWED_ORIGINS:
+        origin = request.headers.get('Origin')
+        if origin:
             resp.headers['Access-Control-Allow-Origin'] = origin
+        else:
+            resp.headers['Access-Control-Allow-Origin'] = '*'
         resp.headers['Access-Control-Allow-Methods'] = 'POST, OPTIONS'
         resp.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization'
         return resp, 200
