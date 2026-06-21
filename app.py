@@ -110,6 +110,21 @@ def health():
     return jsonify({"status": "ok"}), 200
 
 
+@app.route('/api/ping', methods=['GET', 'OPTIONS'])
+def ping() -> Response:
+    """Lightweight keepalive endpoint. Frontend calls this every ~55s to prevent
+    the Hugging Face Space from going to sleep during active scanning sessions."""
+    if request.method == 'OPTIONS':
+        resp = jsonify({'status': 'ok'})
+        origin = request.headers.get('Origin', '')
+        if origin in ALLOWED_ORIGINS:
+            resp.headers['Access-Control-Allow-Origin'] = origin
+        resp.headers['Access-Control-Allow-Methods'] = 'GET, OPTIONS'
+        resp.headers['Access-Control-Allow-Headers'] = 'Content-Type'
+        return resp, 200
+    return jsonify({"status": "alive", "timestamp": datetime.now().isoformat()}), 200
+
+
 @app.route('/')
 def index():
     """Serve the React frontend app, or JSON status for API clients."""

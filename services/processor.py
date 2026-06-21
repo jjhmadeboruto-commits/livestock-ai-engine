@@ -127,7 +127,9 @@ class AnimalProcessor:
         "donkey":       ["a donkey", "a mule", "a burro", "a domestic donkey"],
         "poultry":      ["a chicken", "a hen", "a rooster", "a turkey", "a duck", "a poultry bird"],
         "invalid":      ["a person", "a human", "a dog", "a cat", "a vehicle", "a building", "a car",
-                         "a phone", "a computer", "a mouse", "a rat", "a wild animal", "a website screenshot"],
+                         "a phone", "a computer", "a mouse", "a rat", "a wild animal", "a website screenshot",
+                         "a toy animal figurine", "a plastic model animal", "a phone home screen",
+                         "a smartphone wallpaper", "an android home screen", "a phone lock screen"],
     }
 
     _yolo_model = None
@@ -314,17 +316,23 @@ class AnimalProcessor:
             )
             if geometric_weight_kg is not None:
                 prompt += f"Our geometric computer vision model has estimated the weight at {geometric_weight_kg:.1f} kg based on the animal's bounding box.\n"
-            
+
             prompt += (
                 "\nTASK 1 — GATE CHECK: First determine if this is a supported livestock animal.\n"
                 "Supported species: cattle (cow/bull/calf), pig, goat, sheep, donkey, poultry (chicken/duck/turkey).\n"
-                "If it is NOT livestock (e.g. dog, cat, person, phone, screenshot), set is_livestock to false and fill rejection_reason.\n\n"
-                "TASK 2 — ENRICHMENT: If it IS livestock, fill in all the analysis fields below.\n\n"
+                "REJECT immediately (is_livestock: false) if the image shows:\n"
+                "  - A dog, cat, rat, mouse, wild animal, or non-livestock pet\n"
+                "  - A person or human body part\n"
+                "  - A phone screen, smartphone home screen, android wallpaper, lock screen, or app screenshot\n"
+                "  - A toy animal, plastic figurine, stuffed animal, model, or sculpture of an animal\n"
+                "  - A vehicle, building, plant, food, or any inanimate object\n"
+                "  - A computer/tablet screen, website screenshot, or any digital display\n\n"
+                "TASK 2 — ENRICHMENT: If it IS a real living livestock animal, fill in all the analysis fields below.\n\n"
                 "Return ONLY a valid JSON object with exactly these keys:\n"
                 "{\n"
                 "  \"is_livestock\": <true or false>,\n"
                 "  \"rejection_reason\": \"<if is_livestock is false: one clear sentence why it cannot be weighed. Empty string if livestock.>\",\n"
-                "  \"detected_species\": \"<what you actually see, e.g. Holstein cow, pig, goat, dog, cat, phone>\",\n"
+                "  \"detected_species\": \"<what you actually see, e.g. Holstein cow, pig, goat, dog, cat, toy donkey figurine, phone screen>\",\n"
                 "  \"breed\": \"<specific breed name, e.g. Holstein-Friesian, Duroc, Boer Goat, or Mixed/Unknown>\",\n"
                 "  \"sex\": \"<male, female, or unknown>\",\n"
                 "  \"estimated_age_months\": <integer — best estimate of age in months>,\n"
@@ -335,12 +343,12 @@ class AnimalProcessor:
                 "  \"visible_health_concerns\": \"<any visible issues like wounds, lameness, distended belly, or None observed>\",\n"
                 "  \"estimated_weight_range_kg\": [<min_integer>, <max_integer>],\n"
                 "  \"photo_quality_note\": \"<one short sentence on photo quality and positioning>\",\n"
-                "  \"gemini_explanation\": \"<A warm, clear, 3-5 sentence explanation written directly TO the farmer. Start with what you visually observed. Explain WHY you estimated the weight — mentioning breed, body condition, age, belly size, muscle development. Say what would improve accuracy. End with a helpful farming tip.>\",\n"
-                "  \"ai_self_review\": \"<A short internal critique of the geometric weight estimate (if provided). Is the geometric weight feasible? Was it adjusted based on your visual assessment? Why?>\"\n"
+                "  \"gemini_explanation\": \"<A warm, clear, 3-5 sentence explanation written directly TO the farmer. Start with what you visually observed. Explain WHY you estimated the weight — mentioning breed, body condition, age, belly size, muscle development. Say what would improve accuracy. End with a helpful farming tip.>\"\n"
                 "}\n\n"
                 "Body condition scoring: 1=Emaciated(thin), 2=Very thin(thin), 3=Moderate(fair), 4=Good(good), 5=Excellent/Obese(excellent)\n"
                 "Weight guide: dairy cows 400-700 kg, beef bulls 500-800 kg, calves 50-200 kg, pigs 80-250 kg, goats 20-90 kg, sheep 30-120 kg, donkeys 80-300 kg, poultry 0.5-8 kg\n"
                 "NEVER estimate above biologically plausible maximums.\n"
+                "BE STRICT: a toy figurine is NOT a livestock animal — reject it.\n"
                 "Return ONLY the JSON object. No other text, no markdown, no code fences."
             )
 
@@ -689,11 +697,14 @@ class AnimalProcessor:
         if self.animal_type == "donkey":
             weight_kg = (girth_cm * length_cm) / 10.5
 
-        # ── Step 4: Gemini Combined Gate + Enrichment & Self-Review (ONE API call) ─────────
-        # We call _gemini_analyze and pass the raw geometric weight so the AI can evaluate it!
+        # ── Step 4: Gemini Combined Gate + Enrichment (ONE API call) ─────────
+        # Pass the raw geometric weight so Gemini can evaluate it in context.
+        # NOTE: ai_self_review is generated AFTER blending (Step 8) so it always
+        # references the correct final weight shown to the farmer.
         gemini_data = self._gemini_analyze(image_bgr, requested_species=self.animal_type, geometric_weight_kg=weight_kg)
-        
-        # Gate check — reject non-livestock (this now happens after geometric processing but still prevents wrong output)
+        raw_geometric_weight_kg = weight_kg  # save for self-review text
+
+        # Gate check — reject non-livestock
         if not gemini_data.get("is_livestock", True):
             detected_thing = gemini_data.get("detected_species", "unknown object")
             rejection_msg  = gemini_data.get(
@@ -738,38 +749,62 @@ class AnimalProcessor:
             if self.animal_type in self.GEMINI_DOMINANT_SPECIES or is_contour or box_coverage < 0.10:
                 # Gemini 80%, geometry 20%
                 weight_kg = weight_kg * 0.20 + gemini_mid * 0.80
+                blend_desc = "80% Gemini visual + 20% geometric"
             else:
                 # Geometry 60%, Gemini 40%
                 weight_kg = weight_kg * 0.60 + gemini_mid * 0.40
+                blend_desc = "60% geometric + 40% Gemini visual"
 
             gemini_cross_check = {"min": g_min, "max": g_max, "midpoint": round(gemini_mid, 1)}
+        else:
+            blend_desc = "geometric formula only"
 
         # ── Step 7: Hard species weight cap ───────────────────────────────────
         hard_cap  = self.WEIGHT_HARD_CAPS.get(self.animal_type, 800)
         min_floor = calibration["expected_range"][0] * 0.5
         weight_kg = max(min_floor, min(weight_kg, hard_cap))
+        final_weight_kg = float(round(weight_kg, 2))
+
+        # ── Step 8: Generate ai_self_review using the FINAL blended weight ─────
+        # This ensures the self-review text always matches the displayed weight.
+        species_name     = calibration["name"]
+        exp_min, exp_max = calibration.get("expected_range", [0, hard_cap])
+        gemini_range_str = (
+            f"{int(g_min)}–{int(g_max)} kg"
+            if gemini_range and isinstance(gemini_range, (list, tuple)) and len(gemini_range) == 2
+            else "not available"
+        )
+        within_bio = exp_min <= final_weight_kg <= hard_cap
+        if within_bio:
+            range_verdict = f"within the biological range of {exp_min}–{exp_max} kg for {species_name}"
+        else:
+            range_verdict = f"outside the typical range of {exp_min}–{exp_max} kg — please verify"
+        ai_self_review = (
+            f"The geometric computer vision model estimated {raw_geometric_weight_kg:.1f} kg based on the "
+            f"animal's bounding box dimensions. "
+            f"Gemini's visual assessment suggested a weight in the range of {gemini_range_str}. "
+            f"After applying the BCS correction ({body_condition}, ×{bcs_factor}) and blending "
+            f"({blend_desc}), the final confirmed weight is {final_weight_kg} kg — "
+            f"{range_verdict}."
+        )
 
         # ── AI attribution ─────────────────────────────────────────────────────
         ai_attribution = {
             "detection_model":      "YOLOv8n (Ultralytics)",
             "classification_model": "CLIP ViT-B/32 (OpenAI)",
-            "enrichment_model":     getattr(self, "last_gemini_model_used", "Google Gemini 3.5 Flash") if gemini_used else None,
+            "enrichment_model":     getattr(self, "last_gemini_model_used", "Google Gemini 2.5 Flash") if gemini_used else None,
             "weight_formula":       "Schoorl Girth Formula + Gemini Visual Intelligence",
             "bcs_correction":       (
                 f"BCS adjustment: {body_condition} (x{bcs_factor})"
                 if gemini_used else "No BCS correction (Gemini key not configured)"
             ),
             "gemini_cross_check": gemini_cross_check,
-            "weight_blend": (
-                "80% Gemini visual + 20% geometric (Gemini dominant for this species)"
-                if self.animal_type in self.GEMINI_DOMINANT_SPECIES and gemini_range
-                else "60% geometric + 40% Gemini visual cross-check"
-            ) if gemini_range else "Geometric formula only (Gemini weight range unavailable)",
+            "weight_blend": blend_desc if gemini_range else "Geometric formula only (Gemini weight range unavailable)",
         }
 
         # ── Biological range check ─────────────────────────────────────────────
         expected_min, expected_max = calibration.get("expected_range", (0, 2000))
-        within_range = expected_min <= weight_kg <= expected_max
+        within_range = expected_min <= final_weight_kg <= expected_max
 
         # ── Aspect ratio warning for contour fallback ──────────────────────────
         warning_message = None
@@ -782,7 +817,7 @@ class AnimalProcessor:
         detected_species_key = self.animal_type
 
         return {
-            "weight":                 float(round(weight_kg, 2)),
+            "weight":                 final_weight_kg,
             "body_length":            float(round(length_cm, 2)),
             "body_height":            float(round(height_cm, 2)),
             "estimated_girth":        float(round(girth_cm, 2)),
@@ -807,7 +842,8 @@ class AnimalProcessor:
             "health_notes":           gemini_data.get("visible_health_concerns", ""),
             "photo_quality_note":     gemini_data.get("photo_quality_note", ""),
             "gemini_explanation":     gemini_data.get("gemini_explanation", ""),
-            "ai_self_review":         gemini_data.get("ai_self_review", ""),
+            # ai_self_review is now built post-blend (Step 8) to match the final displayed weight
+            "ai_self_review":         ai_self_review,
             "gemini_cross_check":     gemini_cross_check,
             # AI attribution
             "ai_attribution":         ai_attribution,
