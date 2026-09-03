@@ -1,9 +1,21 @@
 {
-  "name": "LiveStockAI",
-  "short_name": "LiveStockAI",
-  "start_url": ".",
+  "name": "LiveStock AI",
+  "short_name": "LiveStock",
+  "start_url": "/",
   "display": "standalone",
-  "background_color": "#ffffff",
-  "description": "Livestock weight estimation and management.",
-  "icons": []
+  "background_color": "#09090b",
+  "theme_color": "#16a34a",
+  "description": "Intelligent computer vision livestock weight and health estimation",
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml"
+    },
+    {
+      "src": "/logo.svg",
+      "sizes": "128x128",
+      "type": "image/svg+xml"
+    }
+  ]
 }
