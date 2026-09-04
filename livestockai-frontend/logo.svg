@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
+  <defs>
+    <linearGradient id="logoGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#22c55e" />
+      <stop offset="100%" stop-color="#15803d" />
+    </linearGradient>
+    <linearGradient id="logoBg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#1c1917" />
+      <stop offset="100%" stop-color="#0c0a09" />
+    </linearGradient>
+  </defs>
+  
+  <rect width="128" height="128" rx="32" fill="url(#logoBg)" />
+  <rect x="2" y="2" width="124" height="124" rx="30" fill="none" stroke="#292524" stroke-width="2.5" />
+  
+  <g transform="translate(24, 26)" fill="none" stroke="url(#logoGrad)" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Cattle Head & Horns -->
+    <path d="M 12 20 C 12 8, 24 6, 32 14 C 40 10, 48 10, 56 14 C 64 6, 76 8, 76 20 C 76 36, 68 52, 56 60 L 32 60 C 20 52, 12 36, 12 20 Z" fill="#22c55e" fill-opacity="0.12" />
+    <!-- Ears -->
+    <path d="M 12 24 C 2 24, 0 32, 8 36 C 14 36, 16 30, 16 28" />
+    <path d="M 76 24 C 86 24, 88 32, 80 36 C 74 36, 72 30, 72 28" />
+    <!-- Muzzle / Scale target -->
+    <ellipse cx="44" cy="54" rx="14" ry="8" stroke-width="3.5" fill="#22c55e" fill-opacity="0.2" />
+    <circle cx="38" cy="54" r="2" fill="#4ade80" stroke="none" />
+    <circle cx="50" cy="54" r="2" fill="#4ade80" stroke="none" />
+    <!-- Eyes -->
+    <circle cx="30" cy="34" r="3" fill="#4ade80" stroke="none" />
+    <circle cx="58" cy="34" r="3" fill="#4ade80" stroke="none" />
+    <!-- Precision Brackets -->
+    <path d="M 2 12 L 2 2 L 12 2" stroke="#4ade80" stroke-width="3.5" />
+    <path d="M 76 2 L 86 2 L 86 12" stroke="#4ade80" stroke-width="3.5" />
+    <path d="M 2 66 L 2 76 L 12 76" stroke="#4ade80" stroke-width="3.5" />
+    <path d="M 76 76 L 86 76 L 86 66" stroke="#4ade80" stroke-width="3.5" />
+  </g>
+</svg>
