@@ -335,7 +335,8 @@ class AnimalProcessor:
                 "  \"detected_species\": \"<what you actually see, e.g. Holstein cow, pig, goat, dog, cat, toy donkey figurine, phone screen>\",\n"
                 "  \"breed\": \"<specific breed name, e.g. Holstein-Friesian, Duroc, Boer Goat, or Mixed/Unknown>\",\n"
                 "  \"sex\": \"<male, female, or unknown>\",\n"
-                "  \"estimated_age_months\": <integer — best estimate of age in months>,\n"
+                "  \"estimated_age_months\": <number — best estimate of age in months; for poultry/chickens use fractional months like 1.5 for 6 weeks>,\n"
+                "  \"estimated_age_display\": \"<friendly age string, e.g. '6 weeks' or '18 weeks' for poultry; '14 months' or '3.5 years' for cattle/donkeys; '5 months' for pigs/goats/sheep>\",\n"
                 "  \"body_condition\": \"<exactly one of: thin, fair, good, excellent>\",\n"
                 "  \"body_condition_score\": <integer 1 to 5>,\n"
                 "  \"posture\": \"<e.g. standing alert, grazing, resting, walking>\",\n"
@@ -507,7 +508,8 @@ class AnimalProcessor:
                 "{\n"
                 "  \"breed\": \"<specific breed name, e.g. Large Black Pig, Duroc, Berkshire, Holstein, Boer Goat, or Mixed/Unknown>\",\n"
                 "  \"sex\": \"<male, female, or unknown>\",\n"
-                "  \"estimated_age_months\": <integer — your best estimate of the animal's age in months>,\n"
+                "  \"estimated_age_months\": <number — your best estimate of the animal's age in months; for poultry/chickens use fractional months like 1.5 for 6 weeks>,\n"
+                "  \"estimated_age_display\": \"<friendly age string, e.g. '6 weeks' or '18 weeks' for poultry; '14 months' or '3.5 years' for cattle/donkeys; '5 months' for pigs/goats/sheep>\",\n"
                 "  \"body_condition\": \"<exactly one of: thin, fair, good, excellent>\",\n"
                 "  \"body_condition_score\": <integer 1 to 5>,\n"
                 "  \"posture\": \"<e.g. standing alert, grazing, resting, walking>\",\n"
@@ -816,6 +818,23 @@ class AnimalProcessor:
         # Detected species key (internal, for scan_record bucketing)
         detected_species_key = self.animal_type
 
+        # Smart age formatting (weeks for poultry, years for mature cattle/donkeys)
+        age_mo = gemini_data.get("estimated_age_months")
+        age_display = gemini_data.get("estimated_age_display")
+        if not age_display and age_mo is not None:
+            try:
+                mo_val = float(age_mo)
+                if self.animal_type == "poultry":
+                    wks = max(1, int(round(mo_val * 4.345)))
+                    age_display = f"{wks} wk{'s' if wks != 1 else ''}"
+                elif mo_val >= 24:
+                    yrs = mo_val / 12.0
+                    age_display = f"{yrs:.1f}".rstrip('0').rstrip('.') + " yrs"
+                else:
+                    age_display = f"{int(round(mo_val))} mo"
+            except (ValueError, TypeError):
+                age_display = f"{age_mo} mo"
+
         return {
             "weight":                 final_weight_kg,
             "body_length":            float(round(length_cm, 2)),
@@ -834,6 +853,7 @@ class AnimalProcessor:
             "breed":                  gemini_data.get("breed", "Unknown"),
             "sex":                    gemini_data.get("sex", "Unknown"),
             "estimated_age_months":   gemini_data.get("estimated_age_months"),
+            "estimated_age_display":  age_display,
             "posture":                gemini_data.get("posture", ""),
             "activity_level":         gemini_data.get("activity_level", ""),
             "visible_health_concerns":gemini_data.get("visible_health_concerns", "None observed"),
@@ -1107,7 +1127,7 @@ class AnimalProcessor:
                 "status": "passed",
                 "detail": f"Species: {result.get('animal_type')}. Breed: {result.get('breed', 'Unknown')}. "
                           f"Sex: {result.get('sex', 'Unknown')}. "
-                          f"Est. age: {result.get('estimated_age_months', '?')} months.",
+                          f"Est. age: {result.get('estimated_age_display') or (str(result.get('estimated_age_months', '?')) + ' months')}.",
             },
             "step_4_condition": {
                 "label":  "💪 Body Condition Assessment",
