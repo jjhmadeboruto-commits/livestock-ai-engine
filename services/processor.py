@@ -355,7 +355,11 @@ class AnimalProcessor:
                 "  - Goats: mature bucks/does 25–90 kg; weaners/kids 8–25 kg.\n"
                 "  - Sheep: mature rams/ewes 35–110 kg; lambs 10–35 kg.\n"
                 "  - Donkeys: adult 100–320 kg; foals 40–100 kg.\n"
-                "  - Poultry: broilers/layers 1.2–3.8 kg; turkeys 4–12 kg; chicks 0.1–0.8 kg.\n"
+                "  - Poultry: broilers/layers 1.2–3.8 kg; turkeys 4–12 kg; chicks 0.1–0.8 kg.\n\n"
+                "CRITICAL MATURITY ASSESSMENT FOR CATTLE:\n"
+                "  - Check whether a female bovine is a young developing heifer or yearling (10–24 months, smaller pelvic frame, undeveloped udder, short horns, lean adolescent build). Developing heifers typically weigh 200–320 kg (NOT 380–500 kg like mature multi-lactation cows).\n"
+                "  - Fully mature dairy cows have broad barrels, pendulous developed udders, and wide pelvic arches (typically 380–650 kg).\n"
+                "  - If you observe an adolescent heifer or yearling with thin/lean body condition (BCS 1–2), your estimated weight range should accurately reflect her youth and thin state (typically 230–300 kg).\n\n"
                 "Use the animal's physical proportions, muscle definition, and frame to estimate biological weight independently of camera distance.\n"
                 "NEVER estimate above biologically plausible maximums.\n"
                 "BE STRICT: a toy figurine is NOT a livestock animal — reject it.\n"
@@ -769,17 +773,17 @@ class AnimalProcessor:
             if is_distance_distorted:
                 # Monocular 2D vision cannot determine depth without a ruler or LiDAR.
                 # When distance distortion occurs, trust Gemini's multimodal visual intelligence (100%)
-                # to prevent dragging accurate estimates down into absurdity!
-                weight_kg = gemini_mid
-                blend_desc = f"100% Gemini multimodal vision (camera distance compensation active: frame coverage {round(box_coverage*100,1)}%)"
+                # modulated by the detected Body Condition Score (BCS)!
+                weight_kg = gemini_mid * bcs_factor
+                blend_desc = f"100% Gemini multimodal vision (camera distance compensation active: frame coverage {round(box_coverage*100,1)}%, BCS x{bcs_factor})"
             elif self.animal_type in self.GEMINI_DOMINANT_SPECIES or is_contour or not user_calibrated:
                 # Moderate agreement without physical reference: Gemini 85%, geometry 15%
-                weight_kg = weight_kg * 0.15 + gemini_mid * 0.85
-                blend_desc = "85% Gemini visual + 15% geometric"
+                weight_kg = (weight_kg * 0.15 + gemini_mid * 0.85) * bcs_factor
+                blend_desc = f"85% Gemini visual + 15% geometric (BCS x{bcs_factor})"
             else:
                 # Calibrated reference object physically detected and verified
-                weight_kg = weight_kg * 0.50 + gemini_mid * 0.50
-                blend_desc = "50% calibrated geometric + 50% Gemini visual"
+                weight_kg = (weight_kg * 0.50 + gemini_mid * 0.50) * bcs_factor
+                blend_desc = f"50% calibrated geometric + 50% Gemini visual (BCS x{bcs_factor})"
 
             gemini_cross_check = {"min": g_min, "max": g_max, "midpoint": round(gemini_mid, 1)}
         else:
