@@ -359,7 +359,9 @@ class AnimalProcessor:
                 "CRITICAL MATURITY ASSESSMENT FOR CATTLE:\n"
                 "  - Check whether a female bovine is a young developing heifer or yearling (10–24 months, smaller pelvic frame, undeveloped udder, short horns, lean adolescent build). Developing heifers typically weigh 200–320 kg (NOT 380–500 kg like mature multi-lactation cows).\n"
                 "  - Fully mature dairy cows have broad barrels, pendulous developed udders, and wide pelvic arches (typically 380–650 kg).\n"
-                "  - If you observe an adolescent heifer or yearling with thin/lean body condition (BCS 1–2), your estimated weight range should accurately reflect her youth and thin state (typically 230–300 kg).\n\n"
+                "  - If you observe an adolescent heifer or yearling with thin/lean body condition (BCS 1–2), your estimated weight range should accurately reflect her youth and thin state (typically 230–300 kg).\n"
+                "  - IMPORTANT: A large-framed mature cow (Friesian, Holstein, crossbred dairy) with BCS 1–2 (visible ribs, prominent hooks/pins) does NOT weigh less than a heifer. Thin mature cows with large skeletal frames typically still weigh 380–500+ kg. Judge skeletal frame SIZE (height at withers, barrel length, bone diameter) SEPARATELY from flesh cover. A tall cow with visible ribs is NOT a 250 kg animal — she is a 400–500 kg cow that is underfed.\n"
+                "  - Key frame-size indicators: hip height above fence/gate lines, barrel length relative to leg length, head size, bone thickness at cannon bones, hoof circumference. Larger frames = heavier even when thin.\n\n"
                 "Use the animal's physical proportions, muscle definition, and frame to estimate biological weight independently of camera distance.\n"
                 "NEVER estimate above biologically plausible maximums.\n"
                 "BE STRICT: a toy figurine is NOT a livestock animal — reject it.\n"
@@ -772,18 +774,22 @@ class AnimalProcessor:
 
             if is_distance_distorted:
                 # Monocular 2D vision cannot determine depth without a ruler or LiDAR.
-                # When distance distortion occurs, trust Gemini's multimodal visual intelligence (100%)
-                # modulated by the detected Body Condition Score (BCS)!
-                weight_kg = gemini_mid * bcs_factor
-                blend_desc = f"100% Gemini multimodal vision (camera distance compensation active: frame coverage {round(box_coverage*100,1)}%, BCS x{bcs_factor})"
+                # When distance distortion occurs, trust Gemini's multimodal visual intelligence (100%).
+                # DO NOT apply BCS factor here — Gemini's estimated_weight_range_kg
+                # already visually accounts for the animal's body condition.
+                # Applying BCS again would double-penalize thin animals.
+                weight_kg = gemini_mid
+                blend_desc = f"100% Gemini multimodal vision (camera distance compensation active: frame coverage {round(box_coverage*100,1)}%)"
             elif self.animal_type in self.GEMINI_DOMINANT_SPECIES or is_contour or not user_calibrated:
                 # Moderate agreement without physical reference: Gemini 85%, geometry 15%
-                weight_kg = (weight_kg * 0.15 + gemini_mid * 0.85) * bcs_factor
-                blend_desc = f"85% Gemini visual + 15% geometric (BCS x{bcs_factor})"
+                # BCS is already in weight_kg (geometric, from Step 5) and in gemini_mid (visual).
+                # Only apply BCS to the geometric portion; Gemini already accounts for condition.
+                weight_kg = (weight_kg * 0.15 + gemini_mid * 0.85)
+                blend_desc = f"85% Gemini visual + 15% geometric (BCS x{bcs_factor} on geometric portion)"
             else:
                 # Calibrated reference object physically detected and verified
-                weight_kg = (weight_kg * 0.50 + gemini_mid * 0.50) * bcs_factor
-                blend_desc = f"50% calibrated geometric + 50% Gemini visual (BCS x{bcs_factor})"
+                weight_kg = (weight_kg * 0.50 + gemini_mid * 0.50)
+                blend_desc = f"50% calibrated geometric + 50% Gemini visual (BCS x{bcs_factor} on geometric portion)"
 
             gemini_cross_check = {"min": g_min, "max": g_max, "midpoint": round(gemini_mid, 1)}
         else:
