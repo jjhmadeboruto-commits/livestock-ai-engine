@@ -224,16 +224,16 @@ class AnimalProcessor:
         # 3. gemini-3.1-flash-lite: Fast fallback, confirmed working for vision
         # 4. gemini-2.0-flash: Good quota, confirmed working (may hit 429)
         models = [
-            "gemini-2.5-flash",
             "gemini-3.5-flash",
+            "gemini-3.8-flash",
+            "gemini-2.5-flash",
             "gemini-3.1-flash-lite",
-            "gemini-2.0-flash",
         ]
         friendly_names = {
-            "gemini-2.5-flash":      "Google Gemini 2.5 Flash",
             "gemini-3.5-flash":      "Google Gemini 3.5 Flash",
+            "gemini-3.8-flash":      "Google Gemini 3.8 Flash",
+            "gemini-2.5-flash":      "Google Gemini 2.5 Flash",
             "gemini-3.1-flash-lite": "Google Gemini 3.1 Flash-Lite",
-            "gemini-2.0-flash":      "Google Gemini 2.0 Flash",
         }
         ctx = ssl.create_default_context()
         last_error = None
