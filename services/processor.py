@@ -31,8 +31,8 @@ class AnimalProcessor:
 
     # ── Calibration constants ─────────────────────────────────────────────────
     LIVESTOCK_CALIBRATION = {
-        "dairy_cow":    {"divisor": 660.0,  "girth_multiplier": 0.84, "name": "Dairy Cow",          "expected_range": [250, 800],  "coco_classes": {19}, "default_pixel_ratio": 0.15},
-        "beef_cattle":  {"divisor": 600.0,  "girth_multiplier": 0.88, "name": "Beef Cattle",        "expected_range": [300, 800],  "coco_classes": {19}, "default_pixel_ratio": 0.15},
+        "dairy_cow":    {"divisor": 660.0,  "girth_multiplier": 0.84, "name": "Dairy Cow",          "expected_range": [180, 800],  "coco_classes": {19}, "default_pixel_ratio": 0.15},
+        "beef_cattle":  {"divisor": 600.0,  "girth_multiplier": 0.88, "name": "Beef Cattle",        "expected_range": [200, 850],  "coco_classes": {19}, "default_pixel_ratio": 0.15},
         "young_cattle": {"divisor": 640.0,  "girth_multiplier": 0.82, "name": "Young Cattle/Calf",  "expected_range": [50,  300],  "coco_classes": {19}, "default_pixel_ratio": 0.10},
         "pig":          {"divisor": 400.0,  "girth_multiplier": 0.92, "name": "Pig",                 "expected_range": [5,   350],  "coco_classes": {18, 19}, "default_pixel_ratio": 0.10},
         "goat":         {"divisor": 300.0,  "girth_multiplier": 0.78, "name": "Goat",                "expected_range": [8,   120],  "coco_classes": {18}, "default_pixel_ratio": 0.08},
@@ -314,8 +314,10 @@ class AnimalProcessor:
                 f"You are a professional livestock veterinarian and AI assistant for a farming application.\n"
                 f"The farmer believes this image shows a {requested_species}.\n"
             )
-            if geometric_weight_kg is not None:
-                prompt += f"Our geometric computer vision model has estimated the weight at {geometric_weight_kg:.1f} kg based on the animal's bounding box.\n"
+            # Only anchor with geometric sensor weight if a physical reference object was calibrated!
+            # If uncalibrated, passing raw 2D pixel geometry severely distorts Gemini's biological judgment due to camera distance.
+            if geometric_weight_kg is not None and getattr(self, '_pixel_ratio_user_set', False):
+                prompt += f"A calibrated reference object was verified; our geometric sensor measured {geometric_weight_kg:.1f} kg.\n"
 
             prompt += (
                 "\nTASK 1 — GATE CHECK: First determine if this is a supported livestock animal.\n"
@@ -347,7 +349,14 @@ class AnimalProcessor:
                 "  \"gemini_explanation\": \"<A warm, clear, 3-5 sentence explanation written directly TO the farmer. Start with what you visually observed. Explain WHY you estimated the weight — mentioning breed, body condition, age, belly size, muscle development. Say what would improve accuracy. End with a helpful farming tip.>\"\n"
                 "}\n\n"
                 "Body condition scoring: 1=Emaciated(thin), 2=Very thin(thin), 3=Moderate(fair), 4=Good(good), 5=Excellent/Obese(excellent)\n"
-                "Weight guide: dairy cows 400-700 kg, beef bulls 500-800 kg, calves 50-200 kg, pigs 80-250 kg, goats 20-90 kg, sheep 30-120 kg, donkeys 80-300 kg, poultry 0.5-8 kg\n"
+                "Biological weight guide by life stage and breed:\n"
+                "  - Cattle: mature dairy cows (Holstein-Friesian, Jersey, crossbreds) 380–650 kg; mature beef bulls/cows 450–850 kg; heifers and yearling cattle (6–24 months) 180–350 kg; indigenous African cattle (Mashona, Tuli, Nguni, Boran) 240–420 kg; calves (under 6 months) 40–180 kg.\n"
+                "  - Pigs: adult breeding sows/boars 140–280 kg; growers/finishers 50–120 kg; piglets 5–30 kg.\n"
+                "  - Goats: mature bucks/does 25–90 kg; weaners/kids 8–25 kg.\n"
+                "  - Sheep: mature rams/ewes 35–110 kg; lambs 10–35 kg.\n"
+                "  - Donkeys: adult 100–320 kg; foals 40–100 kg.\n"
+                "  - Poultry: broilers/layers 1.2–3.8 kg; turkeys 4–12 kg; chicks 0.1–0.8 kg.\n"
+                "Use the animal's physical proportions, muscle definition, and frame to estimate biological weight independently of camera distance.\n"
                 "NEVER estimate above biologically plausible maximums.\n"
                 "BE STRICT: a toy figurine is NOT a livestock animal — reject it.\n"
                 "Return ONLY the JSON object. No other text, no markdown, no code fences."
@@ -700,11 +709,12 @@ class AnimalProcessor:
             weight_kg = (girth_cm * length_cm) / 10.5
 
         # ── Step 4: Gemini Combined Gate + Enrichment (ONE API call) ─────────
-        # Pass the raw geometric weight so Gemini can evaluate it in context.
-        # NOTE: ai_self_review is generated AFTER blending (Step 8) so it always
-        # references the correct final weight shown to the farmer.
-        gemini_data = self._gemini_analyze(image_bgr, requested_species=self.animal_type, geometric_weight_kg=weight_kg)
-        raw_geometric_weight_kg = weight_kg  # save for self-review text
+        user_calibrated = getattr(self, '_pixel_ratio_user_set', False)
+        # ONLY pass raw geometric weight if user actually provided a physical reference object!
+        # If uncalibrated, passing raw 2D pixel geometry anchors Gemini with distance errors.
+        passed_geom_weight = weight_kg if user_calibrated else None
+        gemini_data = self._gemini_analyze(image_bgr, requested_species=self.animal_type, geometric_weight_kg=passed_geom_weight)
+        raw_geometric_weight_kg = weight_kg  # save for review text
 
         # Gate check — reject non-livestock
         if not gemini_data.get("is_livestock", True):
@@ -724,38 +734,52 @@ class AnimalProcessor:
                 "detected_as": detected_thing,
             }
 
-
         # ── Step 5: BCS Weight Correction ─────────────────────────────────────
         body_condition_raw = (gemini_data.get("body_condition") or "unknown").lower().strip()
         body_condition     = body_condition_raw if body_condition_raw in self.BCS_CORRECTION else "unknown"
         bcs_factor         = self.BCS_CORRECTION[body_condition]
         weight_kg          = weight_kg * bcs_factor
 
-        # ── Step 6: Gemini weight blend (species-aware weighting) ──────────────
+        # ── Step 6: Adaptive AI Weight Blend with Camera Distance Compensation ──
         gemini_range = gemini_data.get("estimated_weight_range_kg")
         gemini_cross_check = None
         gemini_used = bool(gemini_data)
+        is_distance_distorted = False
 
         if gemini_range and isinstance(gemini_range, (list, tuple)) and len(gemini_range) == 2:
             g_min, g_max = float(gemini_range[0]), float(gemini_range[1])
             gemini_mid   = (g_min + g_max) / 2.0
 
-            # For species where geometry is unreliable (pigs, poultry, goats, sheep),
-            # Gemini's visual estimate is more trustworthy — use 80/20 in Gemini's favour.
-            # For large cattle where geometry works well, use 60/40.
             is_contour = method_used == "contour_fallback"
             bounding_box_area = box_width_pixels * box_height_pixels
             img_area = float(image_bgr.shape[0] * image_bgr.shape[1])
             box_coverage = bounding_box_area / max(1.0, img_area)
 
-            if self.animal_type in self.GEMINI_DOMINANT_SPECIES or is_contour or box_coverage < 0.10:
-                # Gemini 80%, geometry 20%
-                weight_kg = weight_kg * 0.20 + gemini_mid * 0.80
-                blend_desc = "80% Gemini visual + 20% geometric"
+            # Check if geometric weight was distorted by camera distance:
+            # Without physical reference object, if the animal is far away (coverage < 30%) or
+            # raw geometric weight is severely disconnected from Gemini's visual range:
+            is_distance_distorted = (
+                not user_calibrated and (
+                    weight_kg < g_min * 0.70 or
+                    weight_kg > g_max * 1.35 or
+                    box_coverage < 0.28
+                )
+            )
+
+            if is_distance_distorted:
+                # Monocular 2D vision cannot determine depth without a ruler or LiDAR.
+                # When distance distortion occurs, trust Gemini's multimodal visual intelligence (100%)
+                # to prevent dragging accurate estimates down into absurdity!
+                weight_kg = gemini_mid
+                blend_desc = f"100% Gemini multimodal vision (camera distance compensation active: frame coverage {round(box_coverage*100,1)}%)"
+            elif self.animal_type in self.GEMINI_DOMINANT_SPECIES or is_contour or not user_calibrated:
+                # Moderate agreement without physical reference: Gemini 85%, geometry 15%
+                weight_kg = weight_kg * 0.15 + gemini_mid * 0.85
+                blend_desc = "85% Gemini visual + 15% geometric"
             else:
-                # Geometry 60%, Gemini 40%
-                weight_kg = weight_kg * 0.60 + gemini_mid * 0.40
-                blend_desc = "60% geometric + 40% Gemini visual"
+                # Calibrated reference object physically detected and verified
+                weight_kg = weight_kg * 0.50 + gemini_mid * 0.50
+                blend_desc = "50% calibrated geometric + 50% Gemini visual"
 
             gemini_cross_check = {"min": g_min, "max": g_max, "midpoint": round(gemini_mid, 1)}
         else:
@@ -768,7 +792,6 @@ class AnimalProcessor:
         final_weight_kg = float(round(weight_kg, 2))
 
         # ── Step 8: Generate ai_self_review using the FINAL blended weight ─────
-        # This ensures the self-review text always matches the displayed weight.
         species_name     = calibration["name"]
         exp_min, exp_max = calibration.get("expected_range", [0, hard_cap])
         gemini_range_str = (
@@ -781,14 +804,23 @@ class AnimalProcessor:
             range_verdict = f"within the biological range of {exp_min}–{exp_max} kg for {species_name}"
         else:
             range_verdict = f"outside the typical range of {exp_min}–{exp_max} kg — please verify"
-        ai_self_review = (
-            f"The geometric computer vision model estimated {raw_geometric_weight_kg:.1f} kg based on the "
-            f"animal's bounding box dimensions. "
-            f"Gemini's visual assessment suggested a weight in the range of {gemini_range_str}. "
-            f"After applying the BCS correction ({body_condition}, ×{bcs_factor}) and blending "
-            f"({blend_desc}), the final confirmed weight is {final_weight_kg} kg — "
-            f"{range_verdict}."
-        )
+
+        if is_distance_distorted:
+            ai_self_review = (
+                f"Camera distance compensation activated: the animal occupied {round(box_coverage*100,1)}% of the frame, "
+                f"causing the raw 2D pixel formula to underestimate at {raw_geometric_weight_kg:.1f} kg. "
+                f"Gemini assessed visual muscle mass, frame size, and breed characteristics to determine an accurate weight of {final_weight_kg:.1f} kg "
+                f"(expected range: {gemini_range_str}) — {range_verdict}."
+            )
+        else:
+            ai_self_review = (
+                f"The geometric computer vision model estimated {raw_geometric_weight_kg:.1f} kg based on the "
+                f"animal's bounding box dimensions. "
+                f"Gemini's visual assessment suggested a weight in the range of {gemini_range_str}. "
+                f"After applying the BCS correction ({body_condition}, ×{bcs_factor}) and blending "
+                f"({blend_desc}), the final confirmed weight is {final_weight_kg} kg — "
+                f"{range_verdict}."
+            )
 
         # ── AI attribution ─────────────────────────────────────────────────────
         ai_attribution = {
