@@ -689,8 +689,17 @@ class AnimalProcessor:
                 method_used      = "contour_fallback"
                 confidence_score = 0.50
 
+        # ── Step 2b: Gemini Multimodal Vision Fallback ─────────────────────────
+        # When low lighting or complex indoor pen geometry prevents YOLO/contour edge detection,
+        # Gemini directly analyzes the livestock image.
         if method_used is None:
-            return None
+            if os.environ.get("GEMINI_API_KEY", "").strip():
+                h, w = image_bgr.shape[:2]
+                x1, y1, x2, y2 = int(w * 0.05), int(h * 0.05), int(w * 0.95), int(h * 0.95)
+                method_used = "gemini_multimodal_vision"
+                confidence_score = 0.75
+            else:
+                return None
 
         # ── Step 3: Geometric extraction ──────────────────────────────────────
         box_width_pixels  = float(x2 - x1)
@@ -756,23 +765,34 @@ class AnimalProcessor:
             g_min, g_max = float(gemini_range[0]), float(gemini_range[1])
             gemini_mid   = (g_min + g_max) / 2.0
 
-            is_contour = method_used == "contour_fallback"
+            is_contour = method_used in ("contour_fallback", "gemini_multimodal_vision")
             bounding_box_area = box_width_pixels * box_height_pixels
             img_area = float(image_bgr.shape[0] * image_bgr.shape[1])
             box_coverage = bounding_box_area / max(1.0, img_area)
 
             # Check if geometric weight was distorted by camera distance:
-            # Without physical reference object, if the animal is far away (coverage < 30%) or
-            # raw geometric weight is severely disconnected from Gemini's visual range:
             is_distance_distorted = (
-                not user_calibrated and (
-                    weight_kg < g_min * 0.70 or
-                    weight_kg > g_max * 1.35 or
-                    box_coverage < 0.28
+                method_used == "gemini_multimodal_vision" or (
+                    not user_calibrated and (
+                        weight_kg < g_min * 0.70 or
+                        weight_kg > g_max * 1.35 or
+                        box_coverage < 0.28
+                    )
                 )
             )
 
-            if is_distance_distorted:
+            if method_used == "gemini_multimodal_vision":
+                weight_kg = gemini_mid
+                blend_desc = "100% Gemini multimodal vision (adaptive low-contrast/barn fallback)"
+                breed_label = gemini_data.get("breed") or calibration["name"]
+                cv2.rectangle(annotated_image, (x1, y1), (x2, y2), (0, 200, 50), 3)
+                cv2.putText(
+                    annotated_image,
+                    f"{breed_label} (Gemini Vision)",
+                    (x1 + 10, max(y1 + 30, 30)),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 200, 50), 2
+                )
+            elif is_distance_distorted:
                 # Monocular 2D vision cannot determine depth without a ruler or LiDAR.
                 # When distance distortion occurs, trust Gemini's multimodal visual intelligence (100%).
                 # DO NOT apply BCS factor here — Gemini's estimated_weight_range_kg
@@ -1291,6 +1311,8 @@ class AnimalProcessor:
         has_human    = False
         largest_non_livestock_class = -1
         largest_non_livestock_area  = 0
+        h, w = image_bgr.shape[:2]
+        frame_area = float(h * w)
 
         for box in results.boxes:
             cls_id = int(box.cls[0])
@@ -1299,31 +1321,37 @@ class AnimalProcessor:
             area   = (x2 - x1) * (y2 - y1)
 
             if cls_id == 0:
-                if conf > 0.35:
+                # Human only flags rejection if they occupy a substantial portion of the frame
+                if conf > 0.45 and area > (frame_area * 0.15):
                     has_human = True
                 continue
 
-            # COCO animal classes
+            # COCO animal classes (14:bird, 15:cat, 16:dog, 17:horse, 18:sheep, 19:cow, 20:elephant, 21:bear, 22:zebra, 23:giraffe)
             if cls_id in {14, 15, 16, 17, 18, 19, 20, 21, 22, 23}:
-                if conf > 0.15:
+                if conf > 0.12:
                     animal_boxes.append((x1, y1, x2, y2, conf, cls_id))
             else:
-                if conf > 0.35 and area > largest_non_livestock_area:
+                # Non-livestock object: ONLY track if it is large enough to dominate the photo (>35% of frame)
+                if conf > 0.50 and area > (frame_area * 0.35) and area > largest_non_livestock_area:
                     largest_non_livestock_area  = area
                     largest_non_livestock_class = cls_id
 
         animal_boxes.sort(key=lambda b: (b[2]-b[0])*(b[3]-b[1]), reverse=True)
 
         for x1, y1, x2, y2, conf, cls_id in animal_boxes[:3]:
-            h, w = image_bgr.shape[:2]
-            if (x2 - x1) * (y2 - y1) < (w * h * 0.03):
+            if (x2 - x1) * (y2 - y1) < (frame_area * 0.02):
                 logging.info("Bounding box too small — discarding.")
                 continue
 
             crop = image_bgr[y1:y2, x1:x2]
             classified_type = self._get_crop_animal_type(crop)
 
-            if classified_type is not None and classified_type != "invalid":
+            # If CLIP says explicitly invalid (e.g. dog, cat), skip this box
+            if classified_type == "invalid":
+                continue
+
+            # If CLIP classified a valid livestock type, use it
+            if classified_type is not None:
                 is_user_cattle       = self.animal_type in {"dairy_cow", "beef_cattle", "young_cattle"}
                 is_classified_cattle = classified_type  in {"dairy_cow", "beef_cattle", "young_cattle"}
 
@@ -1335,16 +1363,16 @@ class AnimalProcessor:
 
                 return (x1, y1, x2, y2, conf)
 
-        # Rejection reason
+            # If CLIP was uncertain (None) but YOLO detected a core livestock class:
+            # (17: horse/donkey, 18: sheep/goat, 19: cow, 14: bird/poultry)
+            if cls_id in {14, 17, 18, 19}:
+                logging.info(f"YOLO detected core livestock class {cls_id} with conf {conf:.2f}; CLIP neutral. Accepting box.")
+                return (x1, y1, x2, y2, conf)
+
+        # Only set rejection if a human or dominant non-livestock object is genuinely taking over the photo
         if has_human:
             self.rejected_reason = "Human detected. Please ensure only livestock animals are in frame."
-        elif animal_boxes:
-            cls_name = self.model.names.get(animal_boxes[0][5], "unknown animal") if hasattr(self.model, 'names') else "unknown animal"
-            self.rejected_reason = (
-                f"Invalid target ({cls_name}) detected. "
-                "Please ensure only livestock animals (cattle, pig, donkey, sheep, goat, poultry) are in frame."
-            )
-        elif largest_non_livestock_area > 0:
+        elif largest_non_livestock_area > (frame_area * 0.35):
             cls_name = self.model.names.get(largest_non_livestock_class, "unknown object") if hasattr(self.model, 'names') else "unknown object"
             self.rejected_reason = (
                 f"Invalid target ({cls_name}) detected. "
