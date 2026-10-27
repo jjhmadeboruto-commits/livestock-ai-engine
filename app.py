@@ -548,7 +548,8 @@ def debug_processor_gate_and_enrich() -> Response:
                 "{\n"
                 "  \"breed\": \"<specific breed name, e.g. Large Black Pig, Duroc, Berkshire, Holstein, Boer Goat, or Mixed/Unknown>\",\n"
                 "  \"sex\": \"<male, female, or unknown>\",\n"
-                "  \"estimated_age_months\": <integer — your best estimate of the animal's age in months>,\n"
+                "  \"estimated_age_months\": <number — your best estimate of the animal's age in months; for poultry/chickens use fractional months like 1.5 for 6 weeks>,\n"
+                "  \"estimated_age_display\": \"<friendly age string, e.g. '6 weeks' or '18 weeks' for poultry; '14 months' or '3.5 years' for cattle/donkeys; '5 months' for pigs/goats/sheep>\",\n"
                 "  \"body_condition\": \"<exactly one of: thin, fair, good, excellent>\",\n"
                 "  \"body_condition_score\": <integer 1 to 5>,\n"
                 "  \"posture\": \"<e.g. standing alert, grazing, resting, walking>\",\n"
@@ -805,6 +806,7 @@ def estimate_weight() -> Response:
         'breed': result.get('breed', 'Unknown'),
         'sex': result.get('sex', 'Unknown'),
         'estimated_age_months': result.get('estimated_age_months'),
+        'estimated_age_display': result.get('estimated_age_display'),
         'posture': result.get('posture', ''),
         'activity_level': result.get('activity_level', ''),
         'visible_health_concerns': result.get('visible_health_concerns', 'None observed'),
