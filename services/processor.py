@@ -31,9 +31,9 @@ class AnimalProcessor:
 
     # ── Calibration constants ─────────────────────────────────────────────────
     LIVESTOCK_CALIBRATION = {
-        "dairy_cow":    {"divisor": 660.0,  "girth_multiplier": 0.88, "name": "Dairy Cow",          "expected_range": [250, 800],  "coco_classes": {19}, "default_pixel_ratio": 0.22},
-        "beef_cattle":  {"divisor": 600.0,  "girth_multiplier": 0.92, "name": "Beef Cattle",        "expected_range": [280, 850],  "coco_classes": {19}, "default_pixel_ratio": 0.22},
-        "young_cattle": {"divisor": 640.0,  "girth_multiplier": 0.82, "name": "Young Cattle/Calf",  "expected_range": [50,  350],  "coco_classes": {19}, "default_pixel_ratio": 0.14},
+        "dairy_cow":    {"divisor": 660.0,  "girth_multiplier": 0.86, "name": "Dairy Cow",          "expected_range": [180, 800],  "coco_classes": {19}, "default_pixel_ratio": 0.15},
+        "beef_cattle":  {"divisor": 600.0,  "girth_multiplier": 0.90, "name": "Beef Cattle",        "expected_range": [200, 850],  "coco_classes": {19}, "default_pixel_ratio": 0.15},
+        "young_cattle": {"divisor": 640.0,  "girth_multiplier": 0.82, "name": "Young Cattle/Calf",  "expected_range": [50,  300],  "coco_classes": {19}, "default_pixel_ratio": 0.10},
         "pig":          {"divisor": 400.0,  "girth_multiplier": 0.92, "name": "Pig",                 "expected_range": [5,   350],  "coco_classes": {18, 19}, "default_pixel_ratio": 0.10},
         "goat":         {"divisor": 300.0,  "girth_multiplier": 0.78, "name": "Goat",                "expected_range": [8,   120],  "coco_classes": {18}, "default_pixel_ratio": 0.08},
         "sheep":        {"divisor": 300.0,  "girth_multiplier": 0.80, "name": "Sheep",               "expected_range": [10,  160],  "coco_classes": {18}, "default_pixel_ratio": 0.08},
@@ -45,7 +45,7 @@ class AnimalProcessor:
     WEIGHT_HARD_CAPS = {
         "dairy_cow":    800,
         "beef_cattle":  800,
-        "young_cattle": 350,
+        "young_cattle": 300,
         "pig":          350,
         "goat":         120,
         "sheep":        160,
@@ -55,10 +55,10 @@ class AnimalProcessor:
 
     # Body Condition Score correction multipliers
     BCS_CORRECTION = {
-        "thin":      0.95,
+        "thin":      0.92,
         "fair":      1.00,
-        "good":      1.06,
-        "excellent": 1.12,
+        "good":      1.08,
+        "excellent": 1.15,
         "unknown":   1.00,
     }
 
@@ -350,24 +350,30 @@ class AnimalProcessor:
                 "}\n\n"
                 "Body condition scoring: 1=Emaciated(thin), 2=Very thin(thin), 3=Moderate(fair), 4=Good(good), 5=Excellent/Obese(excellent)\n"
                 "Biological weight guide by life stage and breed:\n"
-                "  - Cattle: mature dairy cows (Holstein-Friesian, Jersey, Guernsey, Red Dane, crossbred dairy) 400–650 kg; mature beef cattle 450–850 kg; indigenous African cattle (Mashona, Tuli, Nguni, Boran) 300–450 kg; young developing cattle/yearlings (8–20 months) 220–350 kg; calves (under 6 months) 40–180 kg.\n"
+                "  - Cattle: large-framed mature dairy cows (Holstein-Friesian, large crossbreds) 450–650 kg; medium-framed mature dairy cows (Jersey, Guernsey, Ayrshire, small crossbreds) 300–450 kg; mature beef bulls/cows 450–850 kg; indigenous African cattle (Mashona, Tuli, Nguni, Boran) 280–420 kg; heifers and yearling cattle (6–24 months) 180–350 kg; calves (under 6 months) 40–180 kg.\n"
                 "  - Pigs: adult breeding sows/boars 140–280 kg; growers/finishers 50–120 kg; piglets 5–30 kg.\n"
                 "  - Goats: mature bucks/does 25–90 kg; weaners/kids 8–25 kg.\n"
                 "  - Sheep: mature rams/ewes 35–110 kg; lambs 10–35 kg.\n"
                 "  - Donkeys: adult 100–320 kg; foals 40–100 kg.\n"
                 "  - Poultry: broilers/layers 1.2–3.8 kg; turkeys 4–12 kg; chicks 0.1–0.8 kg.\n\n"
-                "CRITICAL MATURITY AND POSTURE ASSESSMENT FOR CATTLE:\n"
-                "  1. DAIRY CONFORMATION vs EMACIATION:\n"
-                "     - Dairy cows are naturally lean, angular, and wedge-shaped when lactating or producing milk.\n"
-                "     - Visible ribs, prominent hook bones (hips), and pin bones are NORMAL dairy conformation (BCS 2.0–3.0) and do NOT mean the animal is an adolescent heifer or miniature cow.\n"
-                "     - Mature dairy cows (e.g. on commercial dairy farms or research stations with walk-through scales) have massive skeletal frames, dense bone mass, and large rumen capacities (water and digestive feed alone weigh 60–90 kg). Their baseline mature weight is 410–550 kg (average 430–480 kg for Jersey/Guernsey/Ayrshire/crossbred cows, and 500–680 kg for Holsteins/Friesians).\n"
-                "     - DO NOT underestimate a mature dairy cow as 250–330 kg just because her ribs are visible. If she has adult height and barrel length, her weight is 400+ kg.\n"
-                "  2. HEAD-DOWN / GRAZING POSTURE COMPENSATION:\n"
-                "     - If the animal has its head lowered to the ground sniffing or grazing, its withers drop, the spine arches, and the neck stretches forward.\n"
-                "     - Reconstruct the true body frame: assess the shoulder-to-tail length, pelvic depth, and leg height. Do NOT let head-down posture trick you into underestimating wither height or live weight.\n"
-                "  3. JUVENILES vs ADULTS:\n"
-                "     - Only estimate below 350 kg if the animal is unambiguously a juvenile/calf (e.g. less than 12 months, baby-proportioned head, short barrel, waist-height to human).\n"
-                "     - An adult bovine standing near buildings, fences, or water tanks with an ear tag and adult proportions weighs 400–600 kg.\n\n"
+                "CRITICAL FRAME-SIZE ASSESSMENT FOR CATTLE:\n"
+                "  Your weight estimate MUST be driven by the animal's SKELETAL FRAME SIZE — not just body condition.\n"
+                "  1. FRAME SIZE determines the weight bracket:\n"
+                "     - LARGE frame (tall at withers, long barrel, thick cannon bones, wide pelvis): 400–650 kg range\n"
+                "     - MEDIUM frame (moderate height, proportional barrel, average bone): 280–420 kg range\n"
+                "     - SMALL frame (short, narrow, fine-boned, juvenile proportions): 150–300 kg range\n"
+                "  2. BODY CONDITION adjusts within that bracket:\n"
+                "     - A LARGE-framed cow with visible ribs (BCS 2) is still 400–500 kg (underfed, not small)\n"
+                "     - A MEDIUM-framed cow in good condition (BCS 3–4) is 350–420 kg\n"
+                "     - A MEDIUM-framed cow with visible ribs (BCS 2) is 280–340 kg\n"
+                "     - A SMALL-framed heifer/yearling is 180–300 kg regardless of condition\n"
+                "  3. HEAD-DOWN / GRAZING POSTURE:\n"
+                "     - If the animal has its head lowered grazing, mentally reconstruct its standing height.\n"
+                "     - Assess shoulder-to-tail length and leg height to judge true frame size.\n"
+                "  4. KEY RULE: Let the animal's actual proportions drive your estimate.\n"
+                "     - A genuinely small/medium cow (short legs, narrow chest, fine bones) CAN weigh 280–350 kg.\n"
+                "     - A genuinely large cow (tall, deep barrel, thick bones) with visible ribs STILL weighs 400+ kg.\n"
+                "     - Do NOT assume all adult cattle weigh 400+ kg. Frame size varies enormously by breed and individual.\n\n"
                 "Use the animal's physical proportions, bone thickness, and skeletal frame to estimate biological weight independently of camera distance.\n"
                 "NEVER estimate above biologically plausible maximums.\n"
                 "BE STRICT: a toy figurine is NOT a livestock animal — reject it.\n"
